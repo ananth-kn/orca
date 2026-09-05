@@ -1,0 +1,193 @@
+{
+  "harbors": [
+    {
+      "name": "Rameswaram Fishing Jetty",
+      "state": "Tamil Nadu",
+      "district": "Ramanathapuram",
+      "latitude": 9.2876,
+      "longitude": 79.3129,
+      "capacity": 850
+    },
+    {
+      "name": "Visakhapatnam Fishing Harbour",
+      "state": "Andhra Pradesh",
+      "district": "Visakhapatnam",
+      "latitude": 17.6974,
+      "longitude": 83.3005,
+      "capacity": 1200
+    },
+    {
+      "name": "Paradeep Fishing Port",
+      "state": "Odisha",
+      "district": "Jagatsinghpur",
+      "latitude": 20.2644,
+      "longitude": 86.6669,
+      "capacity": 900
+    },
+    {
+      "name": "Kochi Thoppumpady Harbour",
+      "state": "Kerala",
+      "district": "Ernakulam",
+      "latitude": 9.9312,
+      "longitude": 76.2673,
+      "capacity": 1100
+    },
+    {
+      "name": "Veraval Fishing Port",
+      "state": "Gujarat",
+      "district": "Gir Somnath",
+      "latitude": 20.9004,
+      "longitude": 70.3667,
+      "capacity": 2500
+    },
+    {
+      "name": "Mangalore Old Port Jetty",
+      "state": "Karnataka",
+      "district": "Dakshina Kannada",
+      "latitude": 12.8568,
+      "longitude": 74.8344,
+      "capacity": 750
+    },
+    {
+      "name": "Chennai Kasimedu Fishing Harbour",
+      "state": "Tamil Nadu",
+      "district": "Chennai",
+      "latitude": 13.1189,
+      "longitude": 80.2974,
+      "capacity": 1400
+    },
+    {
+      "name": "Sassoon Docks Mumbai",
+      "state": "Maharashtra",
+      "district": "Mumbai",
+      "latitude": 18.9142,
+      "longitude": 72.8256,
+      "capacity": 1600
+    },
+    {
+      "name": "Digha Fishing Landing Centre",
+      "state": "West Bengal",
+      "district": "Purba Medinipur",
+      "latitude": 21.6266,
+      "longitude": 87.5074,
+      "capacity": 600
+    },
+    {
+      "name": "Kakinada Fishing Harbour",
+      "state": "Andhra Pradesh",
+      "district": "Kakinada",
+      "latitude": 16.9891,
+      "longitude": 82.2575,
+      "capacity": 800
+    },
+    {
+      "name": "Tuticorin Fishing Port",
+      "state": "Tamil Nadu",
+      "district": "Thoothukudi",
+      "latitude": 8.7942,
+      "longitude": 78.1629,
+      "capacity": 950
+    },
+    {
+      "name": "Porbandar Harbour",
+      "state": "Gujarat",
+      "district": "Porbandar",
+      "latitude": 21.6417,
+      "longitude": 69.6093,
+      "capacity": 1800
+    }
+  ],
+  "boundaries": [
+    {
+      "name": "India-Sri Lanka IMBL (Palk Strait & Gulf of Mannar)",
+      "boundary_type": "IMBL",
+      "country_a": "India",
+      "country_b": "Sri Lanka",
+      "description": "International Maritime Boundary Line established by 1974 and 1976 bilateral agreements. Strict border security zone.",
+      "buffer_alert_km": 5.0,
+      "coordinates": [
+        [79.8667, 10.0833],
+        [79.5333, 9.6833],
+        [79.3833, 9.4833],
+        [79.3500, 9.3667],
+        [79.3833, 9.1000],
+        [79.5167, 8.8667],
+        [79.6667, 8.5000],
+        [79.8000, 8.1500]
+      ]
+    },
+    {
+      "name": "India-Pakistan Maritime Boundary (Sir Creek / Arabian Sea)",
+      "boundary_type": "IMBL",
+      "country_a": "India",
+      "country_b": "Pakistan",
+      "description": "High security maritime border zone off the coast of Gujarat.",
+      "buffer_alert_km": 10.0,
+      "coordinates": [
+        [68.1667, 23.6333],
+        [67.8333, 23.4167],
+        [67.3000, 23.0000],
+        [66.5000, 22.3333],
+        [65.5000, 21.5000]
+      ]
+    }
+  ],
+  "protected_areas": [
+    {
+      "name": "Gulf of Mannar Marine National Park (Core Zone)",
+      "category": "Biosphere Reserve",
+      "state": "Tamil Nadu",
+      "restriction_level": "NO_FISHING",
+      "description": "21 islands coral reef ecosystem. Commercial bottom trawling and fishing strictly banned.",
+      "polygon": [
+        [78.8500, 9.1000],
+        [79.2500, 9.2500],
+        [79.3500, 9.1500],
+        [78.9500, 8.9500],
+        [78.8500, 9.1000]
+      ]
+    },
+    {
+      "name": "Gahirmatha Marine Sanctuary",
+      "category": "Turtle Nesting Sanctuary",
+      "state": "Odisha",
+      "restriction_level": "NO_FISHING",
+      "description": "World's largest Olive Ridley sea turtle rookery. Mechanized fishing banned from Nov to May within 20km of coast.",
+      "polygon": [
+        [86.7500, 20.6500],
+        [87.1500, 20.8000],
+        [87.3500, 20.5500],
+        [86.9500, 20.4000],
+        [86.7500, 20.6500]
+      ]
+    },
+    {
+      "name": "Sundarbans National Park Coastal Buffer",
+      "category": "UNESCO World Heritage Site",
+      "state": "West Bengal",
+      "restriction_level": "RESTRICTED",
+      "description": "Mangrove marine buffer zone. Strictly monitored artisanal fishing only with forest department permit.",
+      "polygon": [
+        [88.5000, 21.8000],
+        [89.1000, 21.8000],
+        [89.1000, 21.5000],
+        [88.5000, 21.5000],
+        [88.5000, 21.8000]
+      ]
+    },
+    {
+      "name": "Malvan Marine Sanctuary",
+      "category": "Marine Sanctuary",
+      "state": "Maharashtra",
+      "restriction_level": "NO_FISHING",
+      "description": "Coral and rocky subtidal ecosystem near Sindhudurg fort.",
+      "polygon": [
+        [73.4300, 16.0800],
+        [73.5000, 16.0800],
+        [73.5000, 16.0200],
+        [73.4300, 16.0200],
+        [73.4300, 16.0800]
+      ]
+    }
+  ]
+}

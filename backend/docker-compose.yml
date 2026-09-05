@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: orca_postgis
+    restart: always
+    environment:
+      POSTGRES_USER: orca_user
+      POSTGRES_PASSWORD: orca_password
+      POSTGRES_DB: orca_marine_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orca_user -d orca_marine_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgis_data:
