@@ -111,7 +111,7 @@ export const TopCommandBar: React.FC = () => {
         );
 try {
   const response = await fetch(
-    'http://localhost:8000/api/voice/chat/audio/stream?lang=kn',
+    'https://orca-production-693f.up.railway.app/api/voice/chat/audio/stream?lang=kn',
     { method: 'POST', body: formData }
   );
 
