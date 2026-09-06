@@ -37,7 +37,7 @@ function App() {
   };
 
   return (
-    <div className="h-[100dvh] w-full overflow-hidden bg-marine-900 selection:bg-marine-200 font-sans">
+    <div className="h-100dvh w-full overflow-hidden bg-marine-900 selection:bg-marine-200 font-sans">
       <div className="h-full w-full relative max-w-md mx-auto bg-black shadow-2xl">
         
         {/* The single universal map experience */}
@@ -48,7 +48,7 @@ function App() {
           onPointerDown={startHold}
           onPointerUp={cancelHold}
           onPointerLeave={cancelHold}
-          className="fixed bottom-24 right-4 z-[60] bg-white/95 backdrop-blur border border-danger/20 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-full px-3 py-2 flex items-center space-x-2 active:scale-95 transition-transform select-none"
+          className="fixed bottom-24 right-4 z-60 bg-white/95 backdrop-blur border border-danger/20 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-full px-3 py-2 flex items-center space-x-2 active:scale-95 transition-transform select-none"
           onContextMenu={(e) => e.preventDefault()}
         >
           <div className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse"></div>
@@ -64,7 +64,7 @@ function App() {
 
         {/* SOS Active Overlay */}
         {sosState === 'active' && (
-          <div className="absolute inset-0 z-[100] bg-danger text-white flex flex-col p-6 animate-in fade-in zoom-in duration-300">
+          <div className="absolute inset-0 z-100 bg-danger text-white flex flex-col p-6 animate-in fade-in zoom-in duration-300">
             <div className="flex justify-between items-start mb-12 mt-8">
               <div className="flex items-center space-x-3">
                 <AlertTriangle size={32} className="animate-pulse" />

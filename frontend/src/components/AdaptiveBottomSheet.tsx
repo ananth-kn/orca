@@ -1,6 +1,5 @@
 import React from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { mockPFZs } from '../api/mockData';
 import { ArrowUp, Navigation2, ShieldAlert, CloudLightning } from 'lucide-react';
 import { calculateDistanceKm, calculateETA } from '../utils/geo';
 
@@ -12,7 +11,10 @@ export const AdaptiveBottomSheet: React.FC = () => {
     setTripState,
     location,
     selectedPfz,
-    timeOffset
+    timeOffset,
+    pfzs,
+    weather,
+    advisorySummary,
   } = useAppStore();
 
   const isTravelling = tripState === 'travelling';
@@ -20,7 +22,7 @@ export const AdaptiveBottomSheet: React.FC = () => {
   const isReasoning = bottomSheetState === 'reasoning';
 
   // Find the selected PFZ if any
-  const targetData = selectedPfz ? mockPFZs.find(p => p.id === selectedPfz) : null;
+  const targetData = selectedPfz ? pfzs.find(p => p.id === selectedPfz) : null;
   const dist = targetData ? calculateDistanceKm(location?.lat || 0, location?.lng || 0, targetData.lat, targetData.lng) : 4.8;
   const eta = calculateETA(dist);
 
@@ -53,7 +55,7 @@ export const AdaptiveBottomSheet: React.FC = () => {
                 </h2>
               </div>
               <p className="font-bold text-marine-900">
-                {targetData ? `${dist} km away · ${targetData.potential} potential` : 'Waves 0.8m · Wind 14 km/h'}
+                {targetData ? `${dist} km away · ${targetData.potential} potential` : `Waves ${weather.waveHeight}m · Wind ${weather.windSpeed} km/h`}
               </p>
             </div>
             
@@ -109,17 +111,17 @@ export const AdaptiveBottomSheet: React.FC = () => {
           <div className="grid grid-cols-3 gap-3 mb-6">
             <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Wind</span>
-              <span className="font-bold text-marine-900 text-lg">14<span className="text-xs">km/h</span></span>
+              <span className="font-bold text-marine-900 text-lg">{weather.windSpeed}<span className="text-xs">km/h</span></span>
               <span className="text-[10px] font-bold text-danger block mt-1">→ 24 km/h</span>
             </div>
             <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Waves</span>
-              <span className="font-bold text-marine-900 text-lg">0.8<span className="text-xs">m</span></span>
+              <span className="font-bold text-marine-900 text-lg">{weather.waveHeight}<span className="text-xs">m</span></span>
               <span className="text-[10px] font-bold text-danger block mt-1">→ 1.6m</span>
             </div>
             <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Rain</span>
-              <span className="font-bold text-marine-900 text-lg">20<span className="text-xs">%</span></span>
+              <span className="font-bold text-marine-900 text-lg">{weather.rainProb}<span className="text-xs">%</span></span>
               <span className="text-[10px] font-bold text-danger block mt-1">→ 70%</span>
             </div>
           </div>
@@ -178,7 +180,9 @@ export const AdaptiveBottomSheet: React.FC = () => {
               <div className="bg-marine-900 text-white p-5 rounded-2xl">
                 <h4 className="text-[10px] font-bold text-marine-400 uppercase tracking-widest mb-2">ORCA Conclusion</h4>
                 <p className="text-sm font-medium leading-relaxed">
-                  "Conditions are favourable now, but wind and waves are expected to increase sharply. Recommended: Begin return before <span className="font-bold text-safe">4:30 PM</span>."
+                  {advisorySummary
+                    ? `“${advisorySummary}”`
+                    : '"Conditions are favourable now, but wind and waves are expected to increase sharply. Recommended: Begin return before 4:30 PM."'}
                 </p>
               </div>
             </div>

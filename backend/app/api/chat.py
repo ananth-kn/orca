@@ -15,20 +15,22 @@ router = APIRouter(prefix="/api/chat", tags=["AI Conversational & Voice"])
 
 class ChatMessageRequest(BaseModel):
     session_id: Optional[str] = None
-    language: Optional[str] = "en"  # kept for compatibility; planner auto-detects actual language
+    language: Optional[str] = "en"
     message: str
-
+    lat: Optional[float] = None
+    lon: Optional[float] = None
 
 class ChatMessageResponse(BaseModel):
     session_id: str
     language: str
-    reply: str
+    response: str          # renamed from "reply"
     provider: str
-    data: Optional[dict] = None  # raw tool data + advisories, for frontend map/UI use
+    data: Optional[dict] = None
 
 
 @router.post("/message", response_model=ChatMessageResponse)
 async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_db)):
+    print("/api/chat/message")
     """
     Endpoint for conversational advisory queries.
     Routes through the planner agent (Sarvam-105B routing + tools + synthesis).
@@ -59,19 +61,19 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
         db.commit()
         return ChatMessageResponse(
             session_id=session_id, language=req.language,
-            reply=reply_text, provider="mock-mvp",
+            response=reply_text, provider="mock-mvp",
         )
 
     try:
-        result = await handle_query(req.message)
+        result = await handle_query(req.message, fallback_lat=req.lat, fallback_lon=req.lon)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planner pipeline failed: {e}")
 
     if "error" in result:
         reply_text = result["error"]
     else:
-        reply_text = result.get("summary", "Sorry, I couldn't generate a response.")
-
+        reply_text = result.get("summary") or "Sorry, I couldn't generate a response."
+    print(reply_text)
     detected_language = result.get("detected_language", req.language)
 
     # Log assistant response (store full structured result as JSON for debugging/audit)
@@ -87,7 +89,7 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
     return ChatMessageResponse(
         session_id=session_id,
         language=detected_language,
-        reply=reply_text,
+        response=reply_text,
         provider="sarvam-105b",
         data={k: v for k, v in result.items() if k != "summary"},
     )

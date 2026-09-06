@@ -1,5 +1,5 @@
 def score_fishing_zone(chlorophyll: dict | None, waves: dict | None) -> dict:
-    chl_value = chlorophyll.get("chlorophyll") if chlorophyll else None
+    chl_value = chlorophyll.get("chlorophyll_mg_m3") if chlorophyll else None
     wave_height = waves.get("wave_height_m") if waves else None
     safety_verdict = waves.get("safety_index") if waves else "unknown"
 

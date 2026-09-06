@@ -1,12 +1,12 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import Map, { Marker, NavigationControl } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useAppStore } from '../store/useAppStore';
-import { mockPFZs } from '../api/mockData';
 import { Target } from 'lucide-react';
 import { AdaptiveBottomSheet } from '../components/AdaptiveBottomSheet';
 import { MapControls } from '../components/MapControls';
 import { TopCommandBar } from '../components/TopCommandBar';
+import { OrcaChat } from '../components/OrcaChat';
 
 export const MainScreen: React.FC = () => {
   const { 
@@ -18,8 +18,16 @@ export const MainScreen: React.FC = () => {
     tripState,
     isFollowMode,
     isPlannerIntelligenceActive,
-    setBottomSheetState
+    setBottomSheetState,
+    pfzs,
+    harbors,
+    refreshMarine,
+    isOffline,
   } = useAppStore();
+
+  useEffect(() => {
+    void refreshMarine();
+  }, [location?.lat, location?.lng, isOffline, refreshMarine]);
 
   const initialViewState = {
     longitude: location?.lng || 74.8425,
@@ -32,7 +40,7 @@ export const MainScreen: React.FC = () => {
   const isTravelling = tripState === 'travelling' || tripState === 'returning';
 
   return (
-    <div className="relative w-full h-[100dvh] bg-marine-50 overflow-hidden">
+    <div className="relative w-full h-dvh bg-marine-50 overflow-hidden">
       
       {/* 1. The Canvas: Live Marine Map */}
       <Map
@@ -60,7 +68,7 @@ export const MainScreen: React.FC = () => {
               <div className="absolute w-8 h-8 bg-marine-500/30 rounded-full animate-ping"></div>
               
               {isTravelling ? (
-                <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[20px] border-b-marine-900 rotate-45 z-10 drop-shadow-lg"></div>
+                <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-20 border-b-marine-900 rotate-45 z-10 drop-shadow-lg"></div>
               ) : (
                 <div className="w-5 h-5 bg-marine-900 border-[3px] border-white rounded-full shadow-lg z-10"></div>
               )}
@@ -68,8 +76,24 @@ export const MainScreen: React.FC = () => {
           </Marker>
         )}
 
+        {/* Harbours */}
+        {activeLayers.harbours && harbors.map((harbor) => (
+          <Marker
+            key={`harbor-${harbor.id}`}
+            longitude={harbor.lon}
+            latitude={harbor.lat}
+            anchor="bottom"
+          >
+            <div className="flex flex-col items-center">
+              <div className="bg-marine-900 text-white text-[9px] font-bold px-2 py-1 rounded-full shadow border border-white">
+                {harbor.name}
+              </div>
+            </div>
+          </Marker>
+        ))}
+
         {/* PFZs */}
-        {activeLayers.pfz && mockPFZs.map((pfz) => (
+        {activeLayers.pfz && pfzs.map((pfz) => (
           <Marker 
             key={pfz.id} 
             longitude={pfz.lng} 
@@ -132,6 +156,8 @@ export const MainScreen: React.FC = () => {
 
       {/* 4. Progressive Bottom Sheet */}
       <AdaptiveBottomSheet />
+
+      <OrcaChat />
 
     </div>
   );

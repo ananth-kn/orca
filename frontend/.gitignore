@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment: keep .env.example in git, but NOT production secrets
+# For Vercel: set VITE_API_BASE_URL in Vercel project settings instead
+.env.local
+.env.production

@@ -2,6 +2,13 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
+import httpx
+import asyncio
+import os
+from datetime import datetime, timedelta, timezone
+import numpy as np
+import xarray as xr
+import copernicusmarine
 
 from core.database import get_db
 from models.advisory import AdvisoryCache
@@ -9,11 +16,13 @@ from services.marine_data import MarineDataService
 
 router = APIRouter(prefix="/api/marine", tags=["Government & Marine Intelligence"])
 
-class AdvisoryRequest(BaseModel):
+
+class Advisory(BaseModel):
     latitude: float
     longitude: float
     radius_km: Optional[float] = 50.0
     location_name: Optional[str] = None
+
 
 @router.get("/sst")
 async def get_sea_surface_temperature(
@@ -26,12 +35,8 @@ async def get_sea_surface_temperature(
     """
     return await get_sst(lat, lon)
 
-import httpx
-
-import httpx
 
 async def get_sst(lat: float, lon: float):
-
     url = "https://marine-api.open-meteo.com/v1/marine"
 
     params = {
@@ -47,40 +52,37 @@ async def get_sst(lat: float, lon: float):
         data = response.json()
 
     return {
-        "latitude": lat,
-        "longitude": lon,
-        "sst": data["current"]["sea_surface_temperature"],
-        "unit": "°C",
-        "data_time": data["current"]["time"],
-        "source": "Open-Meteo"
+        "lat": lat,                                      # was "latitude"
+        "lon": lon,                                       # was "longitude"
+        "sst_celsius": data["current"]["sea_surface_temperature"],   # was "sst"
+        "source": "Open-Meteo",
+        "timestamp": data["current"]["time"],              # was "data_time"
     }
-
-import asyncio
-import os
-import xarray as xr
-import copernicusmarine
-from datetime import datetime, timedelta
-from fastapi import APIRouter, Query
 
 
 DATASET_ID = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
 
 
 def _fetch_chlorophyll_sync(lat: float, lon: float):
+    print("fetch chlorophyll sync")
+
     end_date = datetime.utcnow()
     start_date = end_date - timedelta(days=7)
+
     output_file = f"/tmp/chl_{lat}_{lon}.nc"
+
+    # Search around the requested location
+    radius = 0.25  # ~25 km
 
     copernicusmarine.subset(
         dataset_id=DATASET_ID,
         variables=["CHL"],
-        minimum_longitude=lon,
-        maximum_longitude=lon,
-        minimum_latitude=lat,
-        maximum_latitude=lat,
+        minimum_longitude=lon - radius,
+        maximum_longitude=lon + radius,
+        minimum_latitude=lat - radius,
+        maximum_latitude=lat + radius,
         start_datetime=start_date.strftime("%Y-%m-%dT00:00:00"),
         end_datetime=end_date.strftime("%Y-%m-%dT23:59:59"),
-        coordinates_selection_method="nearest",
         output_directory="/tmp",
         output_filename=os.path.basename(output_file),
         overwrite=True,
@@ -88,52 +90,112 @@ def _fetch_chlorophyll_sync(lat: float, lon: float):
     )
 
     ds = xr.open_dataset(output_file)
-    chl = ds["CHL"]
-    values = chl.values.flatten()
-    valid_idx = np.where(~np.isnan(values))[0]
 
-    if len(valid_idx) == 0:
+    chl = ds["CHL"]
+
+    # ---------------------------------------------------------
+    # Find candidate ocean cells
+    # ---------------------------------------------------------
+    #
+    # CHL itself can be NaN because of clouds, so don't use
+    # "CHL != NaN" as the ocean mask.
+    #
+    # Instead, use the spatial grid and look for cells that
+    # have at least SOME CHL observation during the 7-day period.
+    #
+
+    valid_over_time = ~np.isnan(chl.values)
+
+    # [lat, lon] -> whether this location has ANY valid
+    # chlorophyll observation during the requested period
+    ocean_candidates = np.any(valid_over_time, axis=0)
+
+    if not np.any(ocean_candidates):
         ds.close()
         os.remove(output_file)
         return None, None
 
-    # Find corresponding time for the last valid value
-    time_vals = ds["time"].values
-    # CHL is typically [time, lat, lon]; last valid index maps back to a time index
-    n_time = len(time_vals)
-    last_valid_flat_idx = valid_idx[-1]
-    time_idx = last_valid_flat_idx // (values.size // n_time) if n_time > 1 else 0
-    data_time = str(time_vals[min(time_idx, n_time - 1)])
+    # Build coordinate grid
+    lat_grid, lon_grid = np.meshgrid(
+        ds.latitude.values,
+        ds.longitude.values,
+        indexing="ij"
+    )
 
-    value = float(values[valid_idx[-1]])
+    candidate_lats = lat_grid[ocean_candidates]
+    candidate_lons = lon_grid[ocean_candidates]
+
+    # ---------------------------------------------------------
+    # Find nearest candidate ocean cell
+    # ---------------------------------------------------------
+
+    distances = (
+        (candidate_lats - lat) ** 2 +
+        (candidate_lons - lon) ** 2
+    )
+
+    nearest_idx = np.argmin(distances)
+
+    ocean_lat = float(candidate_lats[nearest_idx])
+    ocean_lon = float(candidate_lons[nearest_idx])
+
+
+    # ---------------------------------------------------------
+    # Get latest valid CHL at that ocean location
+    # ---------------------------------------------------------
+
+    point = chl.sel(
+        latitude=ocean_lat,
+        longitude=ocean_lon
+    )
+
+    values = np.asarray(point.values).squeeze()
+
+    # Search backwards from newest observation
+    for i in range(len(ds.time) - 1, -1, -1):
+
+        value = values[i]
+
+        if not np.isnan(value):
+
+            value = float(value)
+            data_time = str(ds.time.values[i])
+
+            ds.close()
+            os.remove(output_file)
+
+            return value, data_time
+
+    # No valid observation
     ds.close()
     os.remove(output_file)
-    return value, data_time
+
+    return None, None
+
 
 async def get_chlorophyll(lat: float, lon: float):
+    print("get chlorophyll")
     try:
         value, data_time = await asyncio.to_thread(_fetch_chlorophyll_sync, lat, lon)
     except Exception as e:
-        print(f"Copernicus Marine request failed: {e}")
         return _empty_result(lat, lon, "Request failed")
 
     if value is None:
         return _empty_result(lat, lon, "No valid chlorophyll observation found")
 
     return {
-        "latitude": lat,
-        "longitude": lon,
-        "chlorophyll": value,
-        "unit": "mg/m³",
-        "data_time": data_time,
+        "lat": lat,
+        "lon": lon,
+        "chlorophyll_mg_m3": value,       # was "chlorophyll"
         "source": "Copernicus Marine (OCEANCOLOUR_GLO_BGC_L4_NRT_009_102)",
+        "timestamp": data_time,            # was "data_time"
     }
 
 
 def _empty_result(lat, lon, message):
     return {
         "latitude": lat, "longitude": lon,
-        "chlorophyll": None, "unit": "mg/m³",
+        "chlorophyll_mg_m3": None, "unit": "mg/m³",
         "source": "Copernicus Marine", "message": message,
     }
 
@@ -142,14 +204,6 @@ def _empty_result(lat, lon, message):
 async def chlorophyll(lat: float = Query(...), lon: float = Query(...)):
     return await get_chlorophyll(lat, lon)
 
-# import asyncio
-# import os
-# import xarray as xr
-# import copernicusmarine
-# from datetime import datetime, timedelta
-# from fastapi import APIRouter, Query
-from datetime import datetime, timezone
-import numpy as np
 
 now = datetime.now(timezone.utc)
 
@@ -160,16 +214,17 @@ def _fetch_waves_sync(lat: float, lon: float):
     now = datetime.utcnow()
     output_file = f"/tmp/waves_{lat}_{lon}.nc"
 
+    radius = 0.25  # ~25 km search radius
+
     copernicusmarine.subset(
         dataset_id=WAVE_DATASET_ID,
         variables=["VHM0", "VMDR", "VTPK"],
-        minimum_longitude=lon,
-        maximum_longitude=lon,
-        minimum_latitude=lat,
-        maximum_latitude=lat,
+        minimum_longitude=lon - radius,
+        maximum_longitude=lon + radius,
+        minimum_latitude=lat - radius,
+        maximum_latitude=lat + radius,
         start_datetime=(now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:00:00"),
         end_datetime=now.strftime("%Y-%m-%dT%H:00:00"),
-        coordinates_selection_method="nearest",
         output_directory="/tmp",
         output_filename=os.path.basename(output_file),
         overwrite=True,
@@ -178,26 +233,85 @@ def _fetch_waves_sync(lat: float, lon: float):
 
     ds = xr.open_dataset(output_file)
 
-    def _extract(var):
-        arr = ds[var].values.flatten()
-        arr = arr[~np.isnan(arr)]
-        return float(arr[-1]) if len(arr) else None
+    # Latest available time
+    latest = ds.isel(time=-1)
 
-    # Get the last valid time value matching VHM0's non-null entries
-    vhm0_flat = ds["VHM0"].values.flatten()
-    valid_idx = np.where(~np.isnan(vhm0_flat))[0]
-    time_vals = ds["time"].values
-    # time dimension may be size 1 or repeated across lat/lon grid — use time coord directly
-    data_time = str(time_vals[-1]) if len(time_vals) else None
+    # ---------------------------------------------------------
+    # Find nearest valid OCEAN grid cell
+    # ---------------------------------------------------------
+
+    # VHM0 is used as the ocean validity mask.
+    # Land/coastal cells normally contain NaN.
+    ocean_mask = ~np.isnan(latest["VHM0"].values)
+
+    if not np.any(ocean_mask):
+        ds.close()
+        os.remove(output_file)
+
+        return {
+            "wave_height_m": None,
+            "wave_direction_deg": None,
+            "peak_period_s": None,
+            "data_time": str(latest.time.values),
+            "source_lat": None,
+            "source_lon": None,
+        }
+
+    # Build grid
+    lat_grid, lon_grid = np.meshgrid(
+        ds.latitude.values,
+        ds.longitude.values,
+        indexing="ij"
+    )
+
+    ocean_lats = lat_grid[ocean_mask]
+    ocean_lons = lon_grid[ocean_mask]
+
+    # Approximate distance.
+    # Good enough for this small ~25 km search area.
+    distances = (
+        (ocean_lats - lat) ** 2 +
+        (ocean_lons - lon) ** 2
+    )
+
+    nearest_idx = np.argmin(distances)
+
+    ocean_lat = float(ocean_lats[nearest_idx])
+    ocean_lon = float(ocean_lons[nearest_idx])
+
+    # ---------------------------------------------------------
+    # Extract ALL variables from the SAME ocean grid cell
+    # ---------------------------------------------------------
+
+    point = latest.sel(
+        latitude=ocean_lat,
+        longitude=ocean_lon
+    )
+
+    def extract(var):
+        value = np.asarray(point[var].values).squeeze()
+
+        if np.size(value) == 0:
+            return None
+
+        value = float(value)
+
+        return None if np.isnan(value) else value
 
     result = {
-        "wave_height_m": _extract("VHM0"),
-        "wave_direction_deg": _extract("VMDR"),
-        "peak_period_s": _extract("VTPK"),
-        "data_time": data_time,
+        "wave_height_m": extract("VHM0"),
+        "wave_direction_deg": extract("VMDR"),
+        "peak_period_s": extract("VTPK"),
+        "data_time": str(latest.time.values),
+
+        # Actual model grid point used
+        "source_lat": ocean_lat,
+        "source_lon": ocean_lon,
     }
+
     ds.close()
     os.remove(output_file)
+
     return result
 
 
@@ -219,6 +333,7 @@ async def get_waves_and_sea_state(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude")
 ):
+    print("get waves")
     """
     Get live wave height, direction, swell period, and boat safety index.
     Source: Copernicus Marine Global Wave Forecast (MFWAM model).
@@ -235,14 +350,16 @@ async def get_waves_and_sea_state(
         }
 
     return {
-        "latitude": lat,
-        "longitude": lon,
+        "lat": lat,
+        "lon": lon,
         "wave_height_m": data["wave_height_m"],
         "wave_direction_deg": data["wave_direction_deg"],
-        "peak_period_s": data["peak_period_s"],
+        "swell_period_s": data["peak_period_s"],   # renamed from peak_period_s
         "safety_index": _safety_index(data["wave_height_m"]),
         "source": "Copernicus Marine (GLOBAL_ANALYSISFORECAST_WAV_001_027)",
+        "timestamp": data["data_time"],
     }
+
 
 @router.get("/currents")
 async def get_ocean_currents(
@@ -254,6 +371,7 @@ async def get_ocean_currents(
     Sources: INCOIS ERDDAP / Copernicus Ocean Physics.
     """
     return await MarineDataService.get_ocean_currents(lat, lon)
+
 
 @router.get("/alerts")
 async def get_disaster_and_cyclone_alerts(
@@ -267,21 +385,31 @@ async def get_disaster_and_cyclone_alerts(
     """
     return await MarineDataService.get_disaster_alerts(lat, lon, radius_km)
 
+
+# app/api/marine.py
+from app.agents.pfz_scoring import score_fishing_zone
+import asyncio
+
 @router.get("/pfz")
-async def get_potential_fishing_zone(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
-    radius_km: float = Query(50.0, description="Fishing radius in km")
-):
-    """
-    Get Potential Fishing Zone (PFZ) composite score & fishing recommendation.
-    Combines SST, Chlorophyll, Waves, and Current dynamics.
-    """
-    return await MarineDataService.get_composite_pfz_advisory(lat, lon, radius_km)
+async def pfz(lat: float = Query(...), lon: float = Query(...)):
+    chl, waves = await asyncio.gather(
+        get_chlorophyll(lat, lon),       # already defined above in this file
+        get_waves_and_swell(lat, lon),   # already defined above in this file
+    )
+    score = score_fishing_zone(chlorophyll=chl, waves=waves)
+    return {
+        "lat": lat,
+        "lon": lon,
+        "pfz_potential": score.get("chlorophyll_rating"),
+        "composite_score": score.get("confidence"),
+        "recommendation": "Recommended" if score.get("is_potential_zone") else "Not recommended",
+        "layers": {"chlorophyll": chl, "waves": waves},
+    }
+
 
 @router.post("/full-advisory")
 async def get_full_marine_advisory(
-    req: AdvisoryRequest,
+    req: Advisory,
     db: Session = Depends(get_db)
 ):
     """
@@ -319,3 +447,26 @@ async def get_full_marine_advisory(
         db.rollback()
 
     return advisory
+
+
+# Alias for planner tools linkage
+get_waves_and_swell = get_waves_and_sea_state
+
+from app.agents.pfz_scoring import score_fishing_zone
+
+
+@router.get("/pfz")
+async def pfz(lat: float = Query(...), lon: float = Query(...)):
+    chl, waves = await asyncio.gather(
+        get_chlorophyll(lat, lon),
+        get_waves_and_swell(lat, lon),
+    )
+    score = score_fishing_zone(chlorophyll=chl, waves=waves)
+    return {
+        "lat": lat,
+        "lon": lon,
+        "pfz_potential": score.get("chlorophyll_rating"),
+        "composite_score": score.get("confidence"),
+        "recommendation": "Recommended" if score.get("is_potential_zone") else "Not recommended",
+        "layers": {"chlorophyll": chl, "waves": waves},
+    }

@@ -4,9 +4,10 @@ from sqlalchemy.orm import sessionmaker
 from models.base import Base
 from core.config import settings
 
+db_url = settings.effective_database_url or settings.DATABASE_URL
+
 engine = create_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
+    db_url,
     pool_pre_ping=True
 )
 
@@ -26,4 +27,8 @@ def get_db():
 
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✓ ORCA database tables initialized successfully.")
+    except Exception as e:
+        print(f"⚠️ Warning: Database initialization warning: {e}")

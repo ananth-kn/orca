@@ -1,3 +1,13 @@
+import sys
+from pathlib import Path
+
+# Ensure backend and backend/app directories are in sys.path
+backend_dir = Path(__file__).resolve().parent.parent
+app_dir = Path(__file__).resolve().parent
+for p in (str(backend_dir), str(app_dir)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,7 +17,9 @@ from core.database import init_db
 from api.advisory import router as advisory_router
 from api.chat import router as chat_router
 from api.marine import router as marine_router
+from api.voice import router as voice_router
 
+# Initialize database tables
 init_db()
 
 app = FastAPI(
@@ -28,19 +40,30 @@ app = FastAPI(
     version="0.2.0"
 )
 
-# CORS configuration
+from fastapi.middleware.cors import CORSMiddleware
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["*"],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# # CORS configuration for independent frontend deployment (Vercel, localhost, etc.)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS != ["*"] else ["*"],
+#     allow_origin_regex=r"^https?:\/\/.*",
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
-# Mount Routers
+# Mount API Routers
 app.include_router(marine_router)
 app.include_router(advisory_router)
 app.include_router(chat_router)
+app.include_router(voice_router)
 
 @app.get("/", tags=["General"])
 async def root():

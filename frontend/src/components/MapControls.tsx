@@ -43,6 +43,9 @@ export const MapControls: React.FC = () => {
 
         {/* Nearby */}
         <button 
+          onClick={() => {
+            if (!activeLayers.harbours) toggleLayer('harbours');
+          }}
           className="bg-white/90 backdrop-blur p-3 rounded-full shadow-lg text-marine-900 border border-white active:bg-slate-50"
         >
           <MapPin size={22} />

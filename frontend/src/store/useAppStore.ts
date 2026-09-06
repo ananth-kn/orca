@@ -1,4 +1,19 @@
 import { create } from 'zustand';
+import api, { type Alert, type Harbor } from '../api/client';
+import {
+  advisoryToWeather,
+  mapAlerts,
+  seedToLivePfz,
+} from '../api/adapters';
+import {
+  mockAIChatHistory,
+  mockCurrentWeather,
+  mockLiveAlerts,
+  mockPFZs,
+  type AIChatMessage,
+  type PFZData,
+  type WeatherData,
+} from '../api/mockData';
 
 export type TripState = 'harbour' | 'travelling' | 'fishing' | 'returning';
 
@@ -32,6 +47,16 @@ export interface MapLayers {
 
 export type BottomSheetState = 'collapsed' | 'expanded' | 'reasoning' | 'hidden';
 
+function sessionId(): string {
+  if (typeof window === 'undefined') return 'orca-session';
+  const key = 'orca_chat_session';
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  window.localStorage.setItem(key, id);
+  return id;
+}
+
 interface AppState {
   isOffline: boolean;
   setOffline: (status: boolean) => void;
@@ -64,6 +89,22 @@ interface AppState {
 
   isFollowMode: boolean;
   setFollowMode: (follow: boolean) => void;
+
+  pfzs: PFZData[];
+  weather: WeatherData;
+  liveAlerts: typeof mockLiveAlerts;
+  harbors: Harbor[];
+  advisorySummary: string | null;
+  lastSyncedAt: string | null;
+  isSyncing: boolean;
+  syncError: string | null;
+  refreshMarine: () => Promise<void>;
+
+  isChatOpen: boolean;
+  setChatOpen: (open: boolean) => void;
+  chatMessages: AIChatMessage[];
+  isChatSending: boolean;
+  sendChat: (text: string) => Promise<void>;
 }
 
 const defaultLayers: MapLayers = {
@@ -74,7 +115,7 @@ const defaultLayers: MapLayers = {
   harbours: true, ports: false, fuel: false, emergency: false
 };
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   isOffline: false,
   setOffline: (status) => set({ isOffline: status }),
   
@@ -108,5 +149,104 @@ export const useAppStore = create<AppState>((set) => ({
   setTimeOffset: (offset) => set({ timeOffset: offset }),
 
   isFollowMode: false,
-  setFollowMode: (follow) => set({ isFollowMode: follow })
+  setFollowMode: (follow) => set({ isFollowMode: follow }),
+
+  pfzs: mockPFZs,
+  weather: mockCurrentWeather,
+  liveAlerts: mockLiveAlerts,
+  harbors: [],
+  advisorySummary: null,
+  lastSyncedAt: null,
+  isSyncing: false,
+  syncError: null,
+
+  refreshMarine: async () => {
+    const { location, isOffline } = get();
+    if (!location || isOffline) return;
+
+    set({ isSyncing: true, syncError: null });
+    try {
+      const [advisory, pfzRows, harbors] = await Promise.all([
+        api.marine.fullAdvisory(location.lat, location.lng),
+        Promise.all(
+          mockPFZs.map((seed) =>
+            api.marine
+              .pfz(seed.lat, seed.lng)
+              .then((raw) => seedToLivePfz(seed, raw, location))
+              .catch(() => seed)
+          )
+        ),
+        api.advisory.harbors().catch(() => get().harbors),
+      ]);
+
+      const alerts = mapAlerts(
+        (advisory.parameters as Record<string, unknown> | undefined)?.disaster_alerts as Record<string, unknown> ?? advisory
+      );
+
+      set({
+        weather: advisoryToWeather(advisory, mockCurrentWeather),
+        pfzs: pfzRows,
+        harbors,
+        liveAlerts: alerts.length
+          ? alerts.map((a: Alert) => ({
+              type: a.type === 'warning' ? 'warning' : 'warning',
+              title: a.title,
+              description: a.description ?? a.severity,
+              impact: a.severity,
+            }))
+          : mockLiveAlerts,
+        advisorySummary: advisory.summary_advisory != null ? String(advisory.summary_advisory) : null,
+        lastSyncedAt: new Date().toISOString(),
+        isSyncing: false,
+      });
+    } catch (err) {
+      set({
+        isSyncing: false,
+        syncError: err instanceof Error ? err.message : 'Sync failed',
+        pfzs: get().pfzs.length ? get().pfzs : mockPFZs,
+        weather: get().weather ?? mockCurrentWeather,
+      });
+    }
+  },
+
+  isChatOpen: false,
+  setChatOpen: (open) => set({ isChatOpen: open }),
+  chatMessages: mockAIChatHistory,
+  isChatSending: false,
+  sendChat: async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const { location, language, chatMessages } = get();
+    set({
+      isChatSending: true,
+      chatMessages: [...chatMessages, { role: 'user', text: trimmed }],
+    });
+    try {
+      const res = await api.chat.message(
+        sessionId(),
+        trimmed,
+        location?.lat,
+        location?.lng,
+        language
+      );
+      set({
+        isChatSending: false,
+        chatMessages: [
+          ...get().chatMessages,
+          { role: 'assistant', text: res.response },
+        ],
+      });
+    } catch (err) {
+      set({
+        isChatSending: false,
+        chatMessages: [
+          ...get().chatMessages,
+          {
+            role: 'assistant',
+            text: err instanceof Error ? err.message : 'ORCA could not reach the advisory service.',
+          },
+        ],
+      });
+    }
+  },
 }));

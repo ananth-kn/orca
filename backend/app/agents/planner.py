@@ -1,14 +1,13 @@
 import asyncio
 import json
 
-from app.agents.sarvam_client import call_sarvam
+from app.agents.llm_client import call_llm
 from app.agents.geocoding import resolve_location
 from app.agents.tools.chlorophyll_tool import fetch_chlorophyll
 from app.agents.tools.waves_tool import fetch_waves
 from app.agents.tools.sst_tool import fetch_sst
 from app.agents.pfz_scoring import score_fishing_zone
 from app.agents.safety import assess_sea_safety
-
 TOOL_REGISTRY = {
     "chlorophyll": fetch_chlorophyll,
     "waves": fetch_waves,
@@ -42,46 +41,50 @@ Rules:
 
 
 async def _route_query(user_query: str) -> dict:
-    content = await call_sarvam(
+    content = await call_llm(
         messages=[
             {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
             {"role": "user", "content": user_query},
         ],
         temperature=0.1,
-        max_tokens=400,
+        max_tokens=800,
         reasoning_effort=None,
     )
     text = content.strip().replace("```json", "").replace("```", "").strip()
     return json.loads(text)
 
 
-async def handle_query(user_query: str) -> dict:
+async def handle_query(user_query: str, fallback_lat: float | None = None, fallback_lon: float | None = None) -> dict:
+    print("handle_query")
     plan = await _route_query(user_query)
+    print(f"plan: {plan}")
     language = plan.get("detected_language", "en")
 
     # --- Static path: no tools, no factual claims ---
     if plan.get("intent_type") in STATIC_INTENTS:
-        summary_response = await call_sarvam(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"Respond briefly and helpfully in {language}. "
-                        "This is a general/non-factual query — do not state any specific "
-                        "ocean data, numbers, or safety verdicts."
-                    ),
-                },
-                {"role": "user", "content": user_query},
-            ],
-            temperature=0.4,
-            reasoning_effort="low",
-        )
+        try:
+            summary_response = await call_llm(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Respond briefly and helpfully in {language}. "
+                            "This is a general/non-factual query — do not state any specific "
+                            "ocean data, numbers, or safety verdicts."
+                        ),
+                    },
+                    {"role": "user", "content": user_query},
+                ],
+                temperature=0.4,
+                reasoning_effort=None,
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise
 
-        print("Input tokens:", summary_response.usage.prompt_tokens)
-        print("Output tokens:", summary_response.usage.completion_tokens)
-        print("Total tokens:", summary_response.usage.total_tokens)
 
-        summary = summary_response.choices[0].message.content
+        summary = summary_response
 
         return {
             "type": "static",
@@ -92,12 +95,18 @@ async def handle_query(user_query: str) -> dict:
     # --- Data path: resolve location ---
     lat, lon = plan.get("latitude"), plan.get("longitude")
     if lat is None or lon is None:
-        if not plan.get("location_query"):
+        if plan.get("location_query"):
+            try:
+                lat, lon = await resolve_location(plan["location_query"])
+            except ValueError as e:
+                if fallback_lat is not None and fallback_lon is not None:
+                    lat, lon = fallback_lat, fallback_lon
+                else:
+                    return {"error": str(e), "detected_language": language}
+        elif fallback_lat is not None and fallback_lon is not None:
+            lat, lon = fallback_lat, fallback_lon
+        else:
             return {"error": "Could not determine a location from your query.", "detected_language": language}
-        try:
-            lat, lon = await resolve_location(plan["location_query"])
-        except ValueError as e:
-            return {"error": str(e), "detected_language": language}
 
     # --- Run tools in parallel ---
     tools_needed = plan.get("tools_needed") or []
@@ -106,6 +115,7 @@ async def handle_query(user_query: str) -> dict:
         for name in tools_needed
         if name in TOOL_REGISTRY
     }
+    print(f"tasks: {tasks}")
     results = dict(zip(tasks.keys(), await asyncio.gather(*tasks.values()))) if tasks else {}
 
     response = {
@@ -130,7 +140,8 @@ async def handle_query(user_query: str) -> dict:
 
 
 async def _synthesize_response(user_query: str, data: dict, language: str) -> str:
-    return await call_sarvam(
+    print(f"data for synthesize response: {data}")
+    return await call_llm(
         messages=[
             {
                 "role": "system",
@@ -150,5 +161,5 @@ async def _synthesize_response(user_query: str, data: dict, language: str) -> st
         ],
         temperature=0.3,
         max_tokens=600,
-        reasoning_effort="medium",
+        reasoning_effort=None,
     )
