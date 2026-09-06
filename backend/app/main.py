@@ -44,7 +44,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins= ["https://dv9h9m20-anath-kns-projects.vercel.app"],
+    allow_origins= ["https://orca-orpin.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
