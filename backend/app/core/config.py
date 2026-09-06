@@ -5,7 +5,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ORCA Marine Advisory & Intelligence API"
     VERSION: str = "0.2.0"
-    DATABASE_URL: str = "postgresql://postgres:password@127.0.0.1:5432/orca_marine_db"
     SUPABASE_URL: str = ""
     
     # Government & Public APIs
@@ -32,7 +31,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_database_url(self) -> str:
-        raw = self.SUPABASE_URL or self.DATABASE_URL
+        raw = self.SUPABASE_URL
         if not raw:
             return ""
         # Handle special characters in password
