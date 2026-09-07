@@ -8,10 +8,15 @@ from app.agents.tools.waves_tool import fetch_waves
 from app.agents.tools.sst_tool import fetch_sst
 from app.agents.pfz_scoring import score_fishing_zone
 from app.agents.safety import assess_sea_safety
+from app.services.weather_service import get_forecast as fetch_forecast
 TOOL_REGISTRY = {
     "chlorophyll": fetch_chlorophyll,
     "waves": fetch_waves,
     "sst": fetch_sst,
+    "imd_alert": None,        # TODO: IMD cyclone/lightning endpoint
+    "weather_forecast": None, # TODO: IMD / Open-Meteo 24h forecast
+    "tide": None,             # TODO: IMD / port tide data
+    "weather_forecast": fetch_forecast,  # IMD primary → Open-Meteo fallback
 }
 
 # Queries the router is allowed to answer directly, no tools, no facts

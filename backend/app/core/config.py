@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     # Government & Public APIs
     MOSDAC_API_KEY: str = ""
     MOSDAC_BASE_URL: str = "https://www.mosdac.gov.in"
+    IMD_BASE_URL: str = "https://mausam.imd.gov.in"
     INCOIS_BASE_URL: str = "https://erddap.incois.gov.in/erddap"
     COPERNICUS_API_KEY: str = ""
     COPERNICUSMARINE_SERVICE_USERNAME: str = ""
