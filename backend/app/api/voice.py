@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/voice", tags=["Voice Assistant"])
 # ---------------------------------------------------------
 # Config — move these into core.config / env vars for prod
 # ---------------------------------------------------------
-KAGGLE_STT_TTS_URL = settings.KAGGLE_STT_TTS_URL
+KAGGLE_STT_TTS_URL = settings.KAGGLE_STT_TTS_URL or "https://unsilent-sherlene-jurisdictionally.ngrok-free.dev"
 SARVAM_API_KEY = settings.SARVAM_API_KEY
 SARVAM_CHAT_URL = "https://api.sarvam.ai/v1/chat/completions"
 SARVAM_MODEL = "sarvam-105b"

@@ -65,7 +65,23 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
         )
 
     try:
-        result = await handle_query(req.message, fallback_lat=req.lat, fallback_lon=req.lon)
+        # Load multi-turn history for memory (
+        history = (
+            db.query(ChatHistory)
+            .filter(ChatHistory.session_id == session_id)
+            .order_by(ChatHistory.created_at.asc())
+            .limit(10)
+            .all()
+        )
+        prior_context = " ".join(
+            f"{h.role}: {h.message}" for h in history[-6:] if h.role in ("user", "assistant")
+        )
+        result = await handle_query(
+            req.message,
+            fallback_lat=req.lat,
+            fallback_lon=req.lon,
+            context=prior_context,
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Planner pipeline failed: {e}")
 

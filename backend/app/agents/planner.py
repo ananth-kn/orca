@@ -54,9 +54,11 @@ async def _route_query(user_query: str) -> dict:
     return json.loads(text)
 
 
-async def handle_query(user_query: str, fallback_lat: float | None = None, fallback_lon: float | None = None) -> dict:
+async def handle_query(user_query: str, fallback_lat: float | None = None, fallback_lon: float | None = None, context: str = "") -> dict:
     print("handle_query")
-    plan = await _route_query(user_query)
+    # Prepend conversation memory if available
+    query_for_routing = f"Previous context: {context}\n\nCurrent query: {user_query}" if context else user_query
+    plan = await _route_query(query_for_routing)
     print(f"plan: {plan}")
     language = plan.get("detected_language", "en")
 
@@ -135,11 +137,11 @@ async def handle_query(user_query: str, fallback_lat: float | None = None, fallb
     if plan.get("wants_safety_advisory"):
         response["safety_advisory"] = assess_sea_safety(results.get("waves"))
 
-    response["summary"] = await _synthesize_response(user_query, response, language)
+    response["summary"] = await _synthesize_response(user_query, response, language, context)
     return response
 
 
-async def _synthesize_response(user_query: str, data: dict, language: str) -> str:
+async def _synthesize_response(user_query: str, data: dict, language: str, context: str = "") -> str:
     print(f"data for synthesize response: {data}")
     return await call_llm(
         messages=[
@@ -156,7 +158,10 @@ async def _synthesize_response(user_query: str, data: dict, language: str) -> st
             },
             {
                 "role": "user",
-                "content": f"User asked: {user_query}\n\nData: {json.dumps(data)}",
+                "content": (
+                    f"{('Conversation history: ' + context + '\n\n') if context else ''}"
+                    f"User asked: {user_query}\n\nData: {json.dumps(data)}"
+                ),
             },
         ],
         temperature=0.3,
