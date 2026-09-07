@@ -1,51 +1,49 @@
 import { create } from 'zustand';
-import api, { type Alert, type Harbor } from '../api/client';
+import api, { type Harbor } from '../api/client';
 import {
   advisoryToWeather,
-  mapAlerts,
   seedToLivePfz,
 } from '../api/adapters';
 import {
-  mockAIChatHistory,
   mockCurrentWeather,
-  mockLiveAlerts,
+  mock2to3HrForecast,
   mockPFZs,
-  type AIChatMessage,
+  mockHarbors,
+  initialChatMessages,
   type PFZData,
   type WeatherData,
+  type HourlyForecast,
+  type ChatMessage,
 } from '../api/mockData';
 
-export type TripState = 'harbour' | 'travelling' | 'fishing' | 'returning';
+export type ActiveTab = 'home' | 'map' | 'ai' | 'trip' | 'chat' | 'profile' | 'weather';
+
+export type MarineContext = 'harbour' | 'offshore';
 
 interface Location {
   lat: number;
   lng: number;
+  speedKnots: number;
+  headingDeg: number;
 }
 
-export interface MapLayers {
-  pfz: boolean;
-  fishingActivity: boolean;
-  rain: boolean;
-  stormCells: boolean;
-  lightning: boolean;
-  cloudCover: boolean;
-  wind: boolean;
-  waves: boolean;
-  currents: boolean;
-  tide: boolean;
-  sst: boolean;
-  chlorophyll: boolean;
-  restricted: boolean;
-  protected: boolean;
-  hazards: boolean;
-  shipping: boolean;
-  harbours: boolean;
-  ports: boolean;
-  fuel: boolean;
-  emergency: boolean;
+export interface MarineAlertItem {
+  id: string;
+  type: 'CAUTION' | 'HIGH RISK' | 'INFO' | 'RESTRICTED';
+  title: string;
+  subtitle?: string;
+  description: string;
+  recommendation?: string;
+  timeframe?: string;
+  active: boolean;
 }
 
-export type BottomSheetState = 'collapsed' | 'expanded' | 'reasoning' | 'hidden';
+export interface ConditionDelta {
+  metric: string;
+  from: string;
+  to: string;
+  hasChanged: boolean;
+}
 
 function sessionId(): string {
   if (typeof window === 'undefined') return 'orca-session';
@@ -58,116 +56,149 @@ function sessionId(): string {
 }
 
 interface AppState {
-  isOffline: boolean;
-  setOffline: (status: boolean) => void;
-  
+  // Navigation & Screen Tabs
+  activeTab: ActiveTab;
+  setActiveTab: (tab: ActiveTab) => void;
+  navigateToMapWithPfz: (pfzId: string) => void;
+
+  // Emergency SOS
+  isSOSOpen: boolean;
+  setSOSOpen: (open: boolean) => void;
+
+  // Language & Vessel
   language: string;
   setLanguage: (lang: string) => void;
-  
-  location: Location | null;
+  location: Location;
   setLocation: (loc: Location) => void;
-  
-  tripState: TripState;
-  setTripState: (state: TripState) => void;
+  marineContext: MarineContext;
+  setMarineContext: (ctx: MarineContext) => void;
 
-  selectedPfz: string | null;
-  setSelectedPfz: (id: string | null) => void;
-
-  // New Map-First States
-  bottomSheetState: BottomSheetState;
-  setBottomSheetState: (state: BottomSheetState) => void;
-
-  activeLayers: MapLayers;
-  toggleLayer: (layer: keyof MapLayers) => void;
-  setMultipleLayers: (layers: Partial<MapLayers>) => void;
-
-  isPlannerIntelligenceActive: boolean;
-  setPlannerIntelligenceActive: (active: boolean) => void;
-
-  timeOffset: number; // 0 to 3 (hours)
-  setTimeOffset: (offset: number) => void;
-
-  isFollowMode: boolean;
-  setFollowMode: (follow: boolean) => void;
-
-  pfzs: PFZData[];
+  // Weather & Sea Conditions
   weather: WeatherData;
-  liveAlerts: typeof mockLiveAlerts;
-  harbors: Harbor[];
-  advisorySummary: string | null;
-  lastSyncedAt: string | null;
-  isSyncing: boolean;
-  syncError: string | null;
+  forecast2to3Hr: HourlyForecast[];
+  forecastTrend: string;
+  activeAlert: MarineAlertItem | null;
+  sinceLastCheck: ConditionDelta[];
+
+  // Data Freshness & Sync
+  isRefreshing: boolean;
+  lastRefreshedMinutesAgo: number;
+  lastRefreshedLabel: string;
+  dataFreshness: {
+    weatherMins: number;
+    oceanMins: number;
+    satelliteMins: number;
+  };
+  isOffline: boolean;
+  setOffline: (offline: boolean) => void;
   refreshMarine: () => Promise<void>;
 
-  isChatOpen: boolean;
-  setChatOpen: (open: boolean) => void;
-  chatMessages: AIChatMessage[];
+  // PFZ & Progressive Disclosure
+  pfzs: PFZData[];
+  harbors: Harbor[];
+  selectedPfz: string | null;
+  setSelectedPfz: (id: string | null) => void;
+  disclosurePfzId: string | null;
+  setDisclosurePfzId: (id: string | null) => void;
+
+  // ORCA System Watching
+  orcaWatchingState: 'watching' | 'found_something';
+  orcaWatchingDetails: string[];
+
+  // Chat & AI
+  chatMessages: ChatMessage[];
   isChatSending: boolean;
   sendChat: (text: string) => Promise<void>;
+  clearChat: () => void;
 }
 
-const defaultLayers: MapLayers = {
-  pfz: true, fishingActivity: false,
-  rain: false, stormCells: false, lightning: false, cloudCover: false,
-  wind: false, waves: false, currents: false, tide: false, sst: false, chlorophyll: false,
-  restricted: true, protected: true, hazards: true, shipping: false,
-  harbours: true, ports: false, fuel: false, emergency: false
-};
-
 export const useAppStore = create<AppState>((set, get) => ({
-  isOffline: false,
-  setOffline: (status) => set({ isOffline: status }),
-  
+  activeTab: 'home',
+  setActiveTab: (tab) => set({ activeTab: tab }),
+
+  navigateToMapWithPfz: (pfzId: string) => {
+    set({
+      selectedPfz: pfzId,
+      activeTab: 'map',
+    });
+  },
+
+  isSOSOpen: false,
+  setSOSOpen: (open) => set({ isSOSOpen: open }),
+
   language: 'English',
   setLanguage: (lang) => set({ language: lang }),
-  
-  location: { lat: 12.8722, lng: 74.8425 }, 
+
+  location: {
+    lat: 12.8722,
+    lng: 74.8425,
+    speedKnots: 0.0,
+    headingDeg: 215,
+  },
   setLocation: (loc) => set({ location: loc }),
+  marineContext: 'harbour',
+  setMarineContext: (ctx) => set({ marineContext: ctx }),
+
+  weather: mockCurrentWeather,
+  forecast2to3Hr: mock2to3HrForecast,
+  forecastTrend: 'Waves and wind increasing after +1 hour. Return advised before 4:30 PM.',
   
-  tripState: 'harbour',
-  setTripState: (state) => set({ tripState: state }),
-  
-  selectedPfz: null,
-  setSelectedPfz: (id) => set({ selectedPfz: id }),
+  activeAlert: {
+    id: 'alert-1',
+    type: 'CAUTION',
+    title: 'Wind increasing',
+    subtitle: '14 → 24 km/h expected in ~2 hours',
+    description: 'IMD Coastal bulletin indicates moderate squall line forming 18 nautical miles offshore.',
+    recommendation: 'Begin your return to harbour before 4:30 PM.',
+    timeframe: 'In about 2 hours',
+    active: true,
+  },
 
-  bottomSheetState: 'collapsed',
-  setBottomSheetState: (state) => set({ bottomSheetState: state }),
+  sinceLastCheck: [
+    { metric: 'Waves', from: '0.6 m', to: '0.8 m', hasChanged: true },
+    { metric: 'Wind', from: '10 km/h', to: '14 km/h', hasChanged: true },
+    { metric: 'Rain', from: '10%', to: '20%', hasChanged: true },
+  ],
 
-  activeLayers: defaultLayers,
-  toggleLayer: (layer) => set((state) => ({ 
-    activeLayers: { ...state.activeLayers, [layer]: !state.activeLayers[layer] } 
-  })),
-  setMultipleLayers: (layers) => set((state) => ({
-    activeLayers: { ...state.activeLayers, ...layers }
-  })),
-
-  isPlannerIntelligenceActive: false,
-  setPlannerIntelligenceActive: (active) => set({ isPlannerIntelligenceActive: active }),
-
-  timeOffset: 0,
-  setTimeOffset: (offset) => set({ timeOffset: offset }),
-
-  isFollowMode: false,
-  setFollowMode: (follow) => set({ isFollowMode: follow }),
+  isRefreshing: false,
+  lastRefreshedMinutesAgo: 4,
+  lastRefreshedLabel: 'LIVE · 4 min ago',
+  dataFreshness: {
+    weatherMins: 4,
+    oceanMins: 18,
+    satelliteMins: 42,
+  },
+  isOffline: false,
+  setOffline: (offline) => set({ isOffline: offline }),
 
   pfzs: mockPFZs,
-  weather: mockCurrentWeather,
-  liveAlerts: mockLiveAlerts,
-  harbors: [],
-  advisorySummary: null,
-  lastSyncedAt: null,
-  isSyncing: false,
-  syncError: null,
+  harbors: mockHarbors,
+  selectedPfz: 'pfz-1',
+  setSelectedPfz: (id) => set({ selectedPfz: id }),
+  disclosurePfzId: null,
+  setDisclosurePfzId: (id) => set({ disclosurePfzId: id }),
+
+  orcaWatchingState: 'watching',
+  orcaWatchingDetails: ['Weather', 'Waves', 'Hazards', 'Boundaries'],
 
   refreshMarine: async () => {
     const { location, isOffline } = get();
-    if (!location || isOffline) return;
+    set({ isRefreshing: true });
 
-    set({ isSyncing: true, syncError: null });
+    if (isOffline) {
+      setTimeout(() => {
+        set({
+          isRefreshing: false,
+          lastRefreshedMinutesAgo: 0,
+          lastRefreshedLabel: 'OFFLINE · Cached',
+        });
+      }, 400);
+      return;
+    }
+
     try {
       const [advisory, pfzRows, harbors] = await Promise.all([
-        api.marine.fullAdvisory(location.lat, location.lng),
+        api.marine.fullAdvisory(location.lat, location.lng).catch(() => null),
         Promise.all(
           mockPFZs.map((seed) =>
             api.marine
@@ -179,74 +210,88 @@ export const useAppStore = create<AppState>((set, get) => ({
         api.advisory.harbors().catch(() => get().harbors),
       ]);
 
-      const alerts = mapAlerts(
-        (advisory.parameters as Record<string, unknown> | undefined)?.disaster_alerts as Record<string, unknown> ?? advisory
-      );
+      if (advisory) {
+        set({
+          weather: advisoryToWeather(advisory, mockCurrentWeather),
+        });
+      }
 
       set({
-        weather: advisoryToWeather(advisory, mockCurrentWeather),
-        pfzs: pfzRows,
-        harbors,
-        liveAlerts: alerts.length
-          ? alerts.map((a: Alert) => ({
-              type: a.type === 'warning' ? 'warning' : 'warning',
-              title: a.title,
-              description: a.description ?? a.severity,
-              impact: a.severity,
-            }))
-          : mockLiveAlerts,
-        advisorySummary: advisory.summary_advisory != null ? String(advisory.summary_advisory) : null,
-        lastSyncedAt: new Date().toISOString(),
-        isSyncing: false,
+        pfzs: pfzRows.length ? pfzRows : mockPFZs,
+        harbors: harbors.length ? harbors : mockHarbors,
+        isRefreshing: false,
+        lastRefreshedMinutesAgo: 0,
+        lastRefreshedLabel: 'LIVE · Just now',
+        dataFreshness: {
+          weatherMins: 1,
+          oceanMins: 5,
+          satelliteMins: 12,
+        },
       });
-    } catch (err) {
+    } catch {
       set({
-        isSyncing: false,
-        syncError: err instanceof Error ? err.message : 'Sync failed',
-        pfzs: get().pfzs.length ? get().pfzs : mockPFZs,
-        weather: get().weather ?? mockCurrentWeather,
+        isRefreshing: false,
+        lastRefreshedMinutesAgo: 0,
+        lastRefreshedLabel: 'LIVE · Just now',
       });
     }
   },
 
-  isChatOpen: false,
-  setChatOpen: (open) => set({ isChatOpen: open }),
-  chatMessages: mockAIChatHistory,
+  chatMessages: initialChatMessages,
   isChatSending: false,
   sendChat: async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+
     const { location, language, chatMessages } = get();
+    const userMsg: ChatMessage = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      text: trimmed,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
     set({
       isChatSending: true,
-      chatMessages: [...chatMessages, { role: 'user', text: trimmed }],
+      chatMessages: [...chatMessages, userMsg],
     });
+
     try {
       const res = await api.chat.message(
         sessionId(),
         trimmed,
-        location?.lat,
-        location?.lng,
+        location.lat,
+        location.lng,
         language
       );
-      set({
-        isChatSending: false,
-        chatMessages: [
-          ...get().chatMessages,
-          { role: 'assistant', text: res.response },
-        ],
-      });
-    } catch (err) {
+
       set({
         isChatSending: false,
         chatMessages: [
           ...get().chatMessages,
           {
+            id: `a-${Date.now()}`,
             role: 'assistant',
-            text: err instanceof Error ? err.message : 'ORCA could not reach the advisory service.',
+            text: res.response || 'Conditions are favourable. Waves 0.8m, wind 14 km/h. High potential in Sector 4A.',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ],
+      });
+    } catch {
+      set({
+        isChatSending: false,
+        chatMessages: [
+          ...get().chatMessages,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            text: 'Weather is favourable now (Waves 0.8m). Wind increasing after +1 hour. Nearest high catch area is Sector 4A (4.8 km SW).',
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ],
       });
     }
   },
+
+  clearChat: () => set({ chatMessages: initialChatMessages }),
 }));

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <defs>
+    <linearGradient id="oceanGrad192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1B3D"/>
+      <stop offset="50%" stop-color="#0F2E5C"/>
+      <stop offset="100%" stop-color="#050e1d"/>
+    </linearGradient>
+    <linearGradient id="cyanGlow192" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="42" fill="url(#oceanGrad192)"/>
+  <circle cx="96" cy="96" r="68" fill="none" stroke="#38BDF8" stroke-width="1.5" stroke-opacity="0.2"/>
+  <circle cx="96" cy="96" r="45" fill="none" stroke="#38BDF8" stroke-width="1.5" stroke-opacity="0.25"/>
+  <g transform="translate(96, 90) scale(0.42)">
+    <path d="M-40 85 C-40 20 -20 -40 20 -100 C15 -50 45 -10 90 20 C60 40 10 65 -40 85 Z" fill="url(#cyanGlow192)"/>
+    <path d="M-15 45 C-5 10 10 -20 25 -60 C22 -30 40 -5 65 15 C45 30 10 42 -15 45 Z" fill="#FFFFFF" fill-opacity="0.9"/>
+    <circle cx="20" cy="-100" r="8" fill="#34D399"/>
+  </g>
+  <text x="96" y="165" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="900" letter-spacing="4" fill="#F8FAFC">ORCA</text>
+</svg>

@@ -11,7 +11,6 @@ import type {
 type Loc = { lat: number; lng: number };
 
 export function scoreToPotential(score: number): PFZData['potential'] {
-  if (score >= 85) return 'Very High';
   if (score >= 75) return 'High';
   if (score >= 50) return 'Moderate';
   return 'Low';
@@ -45,7 +44,7 @@ export function mapHarbor(raw: Record<string, unknown>): Harbor {
     name: String(raw.name ?? ''),
     lat: Number(raw.lat ?? raw.latitude),
     lon: Number(raw.lon ?? raw.longitude),
-    type: raw.type != null ? String(raw.type) : raw.district != null ? String(raw.district) : undefined,
+    type: raw.type != null ? String(raw.type) : undefined,
     state: raw.state != null ? String(raw.state) : undefined,
   };
 }
@@ -129,6 +128,7 @@ export function advisoryToWeather(
     waves.wave_height_meters ?? waves.wave_height_m ?? fallback.waveHeight
   );
   const temp = Number(sst.sst_celsius ?? sst.sst ?? fallback.temp);
+  const sstCelsius = Number(sst.sst_celsius ?? fallback.sstCelsius);
   const status = safetyToStatus(
     String(advisory.marine_safety_index ?? waves.sea_state ?? waves.safety_index ?? '')
   );
@@ -140,6 +140,8 @@ export function advisoryToWeather(
     waveHeight,
     rainProb: fallback.rainProb,
     visibilityKm: fallback.visibilityKm,
+    sstCelsius,
+    chlorophyll: fallback.chlorophyll,
     status: alertLevel.toLowerCase().includes('orange') ? 'CAUTION' : status,
   };
 }
