@@ -255,36 +255,6 @@ export const api = {
     history: async (session_id: string) =>
       mapChatHistory(await request<unknown>(`/api/chat/history/${session_id}`)),
   },
-
-  voice: {
-    stt: async (file: File | Blob, lang = 'hi', filename = 'voice.webm') => {
-      const form = new FormData();
-      form.append('audio', file, filename);
-      const res = await fetch(`${BASE_URL}/api/voice/stt?lang=${lang}`, {
-        method: 'POST',
-        body: form,
-      });
-      if (!res.ok) throw new Error('STT failed');
-      return (await res.json()) as { text: string; lang: string };
-    },
-    tts: async (text: string, _lang = 'hi') => {
-      const res = await fetch(`${BASE_URL}/api/voice/tts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ text }),
-      });
-      if (!res.ok) throw new Error('TTS failed');
-      return res.blob();
-    },
-    stream: async (file: File | Blob, lang = 'hi', filename = 'voice.webm') => {
-      const form = new FormData();
-      form.append('audio', file, filename);
-      return fetch(`${BASE_URL}/api/voice/chat/audio/stream?lang=${lang}`, {
-        method: 'POST',
-        body: form,
-      });
-    },
-  },
 };
 
 export default api;

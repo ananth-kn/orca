@@ -1,0 +1,43 @@
+@import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+@theme {
+  --color-marine-50: #f4f7fb;
+  --color-marine-100: #e5edf5;
+  --color-marine-200: #cddbe8;
+  --color-marine-300: #a6c0d6;
+  --color-marine-400: #7a9cbe;
+  --color-marine-500: #577d9f;
+  --color-marine-600: #426382;
+  --color-marine-700: #35506a;
+  --color-marine-800: #2e4359;
+  --color-marine-900: #1a2735;
+  --color-safe: #059669;
+  --color-caution: #d97706;
+  --color-danger: #dc2626;
+  --shadow-float: 0 4px 20px -2px rgba(26, 39, 53, 0.1);
+  --shadow-card: 0 1px 3px rgba(26, 39, 53, 0.05);
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--color-marine-50);
+  color: var(--color-marine-900);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Custom Utilities for smooth Map interactions and Sheets */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

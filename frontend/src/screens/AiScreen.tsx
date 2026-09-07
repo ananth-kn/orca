@@ -49,7 +49,10 @@ export const AiScreen: React.FC = () => {
 
   // ─── Voice: record → STT → stream audio response ───────────────────────────
   const handleMicPress = () => {
-    if (isRecording) return;
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
     void startRecording();
   };
 
@@ -60,7 +63,8 @@ export const AiScreen: React.FC = () => {
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      // Force webm/opus so backend sees a consistent format
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
 
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
@@ -76,11 +80,14 @@ export const AiScreen: React.FC = () => {
         stream.getTracks().forEach((track) => track.stop());
         setIsRecording(false);
 
-        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType });
-        console.log('[Voice] Recorded', audioBlob.size, 'bytes, mime:', recorder.mimeType);
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        console.log('[Voice] Recorded', audioBlob.size, 'bytes, mime: audio/webm');
+
+        // Real File with name — avoids undefined file.name in api.voice.stream
+        const file = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
 
         try {
-          const response = await api.voice.stream(audioBlob as unknown as File, langIso);
+          const response = await api.voice.stream(file, langIso);
 
           if (!response.ok) throw new Error(`Voice stream failed: ${response.status}`);
 
