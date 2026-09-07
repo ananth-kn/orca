@@ -87,51 +87,30 @@ export const AiScreen: React.FC = () => {
         const file = new File([audioBlob], 'recording.webm', { type: 'audio/webm' });
 
         try {
-          const response = await api.voice.stream(file, langIso);
+          // Full audio response (non-streaming): STT → LLM → TTS, single audio blob
+          const fd = new FormData();
+          fd.append('audio', file, 'recording.webm');
+          const audioRes = await fetch(
+            `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/api/voice/chat/audio?lang=${langIso}`,
+            { method: 'POST', body: fd }
+          );
+          if (!audioRes.ok) throw new Error(`Voice full failed: ${audioRes.status}`);
 
-          if (!response.ok) throw new Error(`Voice stream failed: ${response.status}`);
+          const userText = audioRes.headers.get('X-User-Text') || '';
+          const answerText = audioRes.headers.get('X-Answer-Text') || '';
+          console.log('[Voice full] User:', userText, '| ORCA:', answerText);
 
-          const userText = response.headers.get('X-User-Text') || '';
-          const answerText = response.headers.get('X-Answer-Text') || '';
-          console.log('[Voice] User:', userText, '| ORCA:', answerText);
+          const store = useAppStore.getState();
+          store.addVoiceTurn(userText, answerText);
 
-          // Play streamed audio chunks
-          const audioCtx = audioCtxRef.current!;
-          let nextStartTime = audioCtx.currentTime;
-          let buffer = new Uint8Array(0);
-
-          const reader = response.body!.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const merged = new Uint8Array(buffer.length + value.length);
-            merged.set(buffer, 0);
-            merged.set(value, buffer.length);
-            buffer = merged;
-
-            while (buffer.length >= 4) {
-              const len = new DataView(buffer.buffer, buffer.byteOffset, 4).getUint32(0, false);
-              if (buffer.length < 4 + len) break;
-
-              const frame = buffer.slice(4, 4 + len);
-              buffer = buffer.slice(4 + len);
-
-              try {
-                const audioData = await audioCtx.decodeAudioData(frame.buffer.slice(0));
-                const source = audioCtx.createBufferSource();
-                source.buffer = audioData;
-                source.connect(audioCtx.destination);
-                const startAt = Math.max(nextStartTime, audioCtx.currentTime);
-                source.start(startAt);
-                nextStartTime = startAt + audioData.duration;
-              } catch {
-                // skip undecodable frame
-              }
-            }
-          }
+          // Play whole audio at once (not chunked/streamed)
+          const audioBlob = await audioRes.blob();
+          const url = URL.createObjectURL(audioBlob);
+          const audio = new Audio(url);
+          audio.play();
+          audio.onended = () => URL.revokeObjectURL(url);
         } catch (err) {
-          console.error('[Voice] Stream error:', err);
+          console.error('[Voice full] Error:', err);
         }
       };
 

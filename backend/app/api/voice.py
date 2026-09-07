@@ -123,6 +123,17 @@ def _synthesize_stream_frames(sentences):
         yield struct.pack(">I", len(audio_bytes)) + audio_bytes
 
 
+@router.post("/chat/audio")
+async def voice_chat_audio_full(audio: UploadFile = File(...), lang: str = "hi"):
+    """Full pipeline (non-streaming): STT → Sarvam LLM → TTS → single audio blob."""
+    audio_bytes = await audio.read()
+    user_text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
+    answer_text = _generate_answer(user_text, lang)
+    answer_audio = _synthesize(answer_text)
+    return StreamingResponse(io.BytesIO(answer_audio), media_type="audio/wav",
+                             headers={"X-User-Text": quote(user_text), "X-Answer-Text": quote(answer_text)})
+
+
 @router.post("/chat/audio/stream")
 async def voice_chat_stream(audio: UploadFile = File(...), lang: str = "hi"):
     t0 = time.perf_counter()

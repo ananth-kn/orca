@@ -110,6 +110,7 @@ interface AppState {
   isChatSending: boolean;
   sendChat: (text: string) => Promise<void>;
   clearChat: () => void;
+  addVoiceTurn: (userText: string, answerText: string) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -294,4 +295,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearChat: () => set({ chatMessages: initialChatMessages }),
+
+  addVoiceTurn: (userText: string, answerText: string) =>
+    set((state) => ({
+      chatMessages: [
+        ...state.chatMessages,
+        { id: `v-${Date.now()}`, role: 'user', text: userText, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+        { id: `a-${Date.now() + 1}`, role: 'assistant', text: answerText, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+      ],
+    })),
 }));
