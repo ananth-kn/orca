@@ -1,0 +1,10 @@
+[
+  {"name":"Sector 4A","lat":12.85,"lon":74.85,"potential":"High","targetSpecies":["Tuna","Mackerel"],"region":"Mangaluru"},
+  {"name":"Sector 2B","lat":13.15,"lon":80.30,"potential":"Moderate","targetSpecies":["Sardine","Shrimp"],"region":"Chennai"},
+  {"name":"Vizag PFZ","lat":17.70,"lon":83.30,"potential":"High","targetSpecies":["Crab","Pomfret"],"region":"Visakhapatnam"},
+  {"name":"Kochi Zone","lat":9.95,"lon":76.25,"potential":"Moderate","targetSpecies":["Tuna","Marlin"],"region":"Kochi"},
+  {"name":"Rameswaram East","lat":9.30,"lon":79.30,"potential":"Low","targetSpecies":["Seer Fish"],"region":"Rameswaram"},
+  {"name":"Veraval Zone","lat":20.90,"lon":70.40,"potential":"High","targetSpecies":["Sardine"],"region":"Veraval"},
+  {"name":"Mumbai Offshore","lat":19.00,"lon":72.85,"potential":"Moderate","targetSpecies":["Shark","Tuna"],"region":"Mumbai"},
+  {"name":"Goa Deep","lat":15.50,"lon":73.85,"potential":"Moderate","targetSpecies":["Shrimp","Pomfret"],"region":"Goa"}
+]

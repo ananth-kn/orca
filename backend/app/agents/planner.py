@@ -99,21 +99,29 @@ async def handle_query(user_query: str, fallback_lat: float | None = None, fallb
             "detected_language": language
         }
 
-    # --- Data path: resolve location ---
-    lat, lon = plan.get("latitude"), plan.get("longitude")
+    # Resolve location: user's GPS first, then common zones if no lat/lon given
     if lat is None or lon is None:
-        if plan.get("location_query"):
-            try:
-                lat, lon = await resolve_location(plan["location_query"])
-            except ValueError as e:
-                if fallback_lat is not None and fallback_lon is not None:
-                    lat, lon = fallback_lat, fallback_lon
-                else:
-                    return {"error": str(e), "detected_language": language}
-        elif fallback_lat is not None and fallback_lon is not None:
+        if fallback_lat is not None and fallback_lon is not None:
             lat, lon = fallback_lat, fallback_lon
         else:
-            return {"error": "Could not determine a location from your query.", "detected_language": language}
+            # Try to match common named zones from user query (simple keyword match)
+            import json
+            try:
+                common = json.load(open("app/data/common_pfz.json"))
+                for zone in common:
+                    if zone["name"].lower() in user_query.lower() or zone["region"].lower() in user_query.lower():
+                        lat, lon = zone["lat"], zone["lon"]
+                        break
+            except Exception:
+                pass
+            if lat is None or lon is None:
+                if plan.get("location_query"):
+                    try:
+                        lat, lon = await resolve_location(plan["location_query"])
+                    except ValueError as e:
+                        return {"error": str(e), "detected_language": language}
+                else:
+                    return {"error": "Could not determine location. Please share your GPS or say a known harbor/zone name.", "detected_language": language}
 
     # --- Run tools in parallel ---
     tools_needed = plan.get("tools_needed") or []
