@@ -1,4 +1,5 @@
 import { useAppStore } from './store/useAppStore';
+import { LoginScreen } from './screens/LoginScreen';
 import { LoginGate } from './components/LoginGate';
 import { BottomNav } from './components/BottomNav';
 import { HomeScreen } from './screens/HomeScreen';
@@ -10,6 +11,8 @@ import { SOSModal } from './components/SOSModal';
 
 export function App() {
   const { activeTab } = useAppStore();
+  const userId = typeof window !== 'undefined' ? localStorage.getItem('orca_user_id') : null;
+  if (!userId) return <LoginScreen />;
 
   return (
     <>
