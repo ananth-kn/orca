@@ -63,31 +63,42 @@ def _transcribe(audio_bytes: bytes, filename: str, lang: str) -> str:
 
 
 def _generate_answer(user_text: str, lang: str) -> str:
-    if not SARVAM_API_KEY:
-        raise HTTPException(status_code=500, detail="SARVAM_API_KEY not configured")
-
+    # Delegate to agent pipeline: planner decides intent, fetches data, synthesizes
+    import asyncio
     try:
-        res = requests.post(
-            SARVAM_CHAT_URL,
-            headers={
-                "api-subscription-key": SARVAM_API_KEY,
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": SARVAM_MODEL,
-                "messages": [
-                    {"role": "system", "content": ORCA_SYSTEM_PROMPT.format(lang=lang)},
-                    {"role": "user", "content": user_text},
-                ],
-                "reasoning_effort": None,
-                "max_tokens": 300,
-            },
-            timeout=30,
+        from app.agents.planner import handle_query
+        result = asyncio.get_event_loop().run_until_complete(
+            handle_query(user_text, fallback_lat=None, fallback_lon=None, context="")
         )
-        res.raise_for_status()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"LLM service unreachable: {e}")
-    return res.json()["choices"][0]["message"]["content"]
+        if "error" in result:
+            return f"Sorry, I could not process that: {result['error']}"
+        return result.get("summary", "Response unavailable.")
+    except Exception as e:
+        # Fallback to original Sarvam direct if planner fails
+        if not SARVAM_API_KEY:
+            raise HTTPException(status_code=500, detail="SARVAM_API_KEY not configured")
+        try:
+            res = requests.post(
+                SARVAM_CHAT_URL,
+                headers={
+                    "api-subscription-key": SARVAM_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": SARVAM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": ORCA_SYSTEM_PROMPT.format(lang=lang)},
+                        {"role": "user", "content": user_text},
+                    ],
+                    "reasoning_effort": None,
+                    "max_tokens": 300,
+                },
+                timeout=30,
+            )
+            res.raise_for_status()
+            return res.json()["choices"][0]["message"]["content"]
+        except requests.RequestException as e:
+            raise HTTPException(status_code=502, detail=f"LLM service unreachable: {e}")
 
 
 def _synthesize(text: str) -> bytes:

@@ -1,25 +1,23 @@
-import asyncio
-import json
+import asyncio, json, os
 
 from app.agents.llm_client import call_llm
 from app.agents.geocoding import resolve_location
 from app.agents.tools.chlorophyll_tool import fetch_chlorophyll
 from app.agents.tools.waves_tool import fetch_waves
 from app.agents.tools.sst_tool import fetch_sst
+from app.agents.tools.weather_tool import fetch_weather
 from app.agents.pfz_scoring import score_fishing_zone
 from app.agents.safety import assess_sea_safety
-from app.services.weather_service import get_forecast as fetch_forecast
+from app.services.marine_data import MarineDataService
+from app.services.weather_service import get_forecast
+
 TOOL_REGISTRY = {
+    "sst": fetch_sst,
     "chlorophyll": fetch_chlorophyll,
     "waves": fetch_waves,
-    "sst": fetch_sst,
-    "imd_alert": None,        # TODO: IMD cyclone/lightning endpoint
-    "weather_forecast": None, # TODO: IMD / Open-Meteo 24h forecast
-    "tide": None,             # TODO: IMD / port tide data
-    "weather_forecast": fetch_forecast,  # IMD primary → Open-Meteo fallback
+    "weather_forecast": fetch_weather if fetch_weather else MarineDataService.get_sst,
 }
 
-# Queries the router is allowed to answer directly, no tools, no facts
 STATIC_INTENTS = {"greeting", "help", "general_explanation", "app_capability"}
 
 ROUTER_SYSTEM_PROMPT = """You are a marine query router for a fishing safety assistant.
@@ -31,16 +29,19 @@ The user may write in any Indian language or English. Classify the query and res
   "location_query": "<place name mentioned, or null>",
   "latitude": <number or null>,
   "longitude": <number or null>,
-  "tools_needed": ["chlorophyll", "waves", "sst"],
+  "tools_needed": ["sst","chlorophyll","waves","weather_forecast"],
   "wants_pfz_advisory": true/false,
-  "wants_safety_advisory": true/false
+  "wants_safety_advisory": true/false,
+  "wants_tide": true/false,
+  "wants_forecast": true/false,
+  "wants_alerts": true/false,
+  "wants_route": true/false
 }
 
 Rules:
 - Use "data_query" for ANYTHING involving fishing zones, sea safety, weather, tides, wave conditions,
-  or any question needing current/real ocean data. Never answer these yourself — always mark tools_needed.
-- Only use "greeting"/"help"/"general_explanation"/"app_capability" for queries with NO factual/data
-  content at all (e.g. "hello", "what can you do", "what is a PFZ" as a generic definition).
+  forecasts, cyclone, or any question needing current/real ocean data. Never answer these yourself — always mark tools_needed.
+- Only use "greeting"/"help"/"general_explanation"/"app_capability" for queries with NO factual/data content at all.
 - If in doubt, choose "data_query" and include relevant tools rather than a static intent.
 """
 
@@ -60,93 +61,47 @@ async def _route_query(user_query: str) -> dict:
 
 
 async def handle_query(user_query: str, fallback_lat: float | None = None, fallback_lon: float | None = None, context: str = "") -> dict:
-    print("handle_query")
-    # Prepend conversation memory if available
-    query_for_routing = f"Previous context: {context}\n\nCurrent query: {user_query}" if context else user_query
-    plan = await _route_query(query_for_routing)
-    print(f"plan: {plan}")
+    plan = await _route_query(user_query)
     language = plan.get("detected_language", "en")
 
-    # --- Static path: no tools, no factual claims ---
+    # --- Static path ---
     if plan.get("intent_type") in STATIC_INTENTS:
-        try:
-            summary_response = await call_llm(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"Respond briefly and helpfully in {language}. "
-                            "This is a general/non-factual query — do not state any specific "
-                            "ocean data, numbers, or safety verdicts."
-                        ),
-                    },
-                    {"role": "user", "content": user_query},
-                ],
-                temperature=0.4,
-                reasoning_effort=None,
-            )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            raise
+        summary = await call_llm(
+            messages=[
+                {"role": "system", "content": f"Respond briefly and helpfully in {language}. This is a general/non-factual query — do not state any specific ocean data, numbers, or safety verdicts."},
+                {"role": "user", "content": user_query},
+            ],
+            temperature=0.4, max_tokens=600, reasoning_effort=None,
+        )
+        return {"type": "static", "summary": summary, "detected_language": language}
 
-
-        summary = summary_response
-
-        return {
-            "type": "static",
-            "summary": summary,
-            "detected_language": language
-        }
-
-    # Resolve location: user's GPS first, then common zones if no lat/lon given
+    # --- Data path ---
+    lat, lon = plan.get("latitude"), plan.get("longitude")
     if lat is None or lon is None:
         if fallback_lat is not None and fallback_lon is not None:
             lat, lon = fallback_lat, fallback_lon
-        else:
-            # Try to match common named zones from user query (simple keyword match)
-            import json
+        elif plan.get("location_query"):
             try:
-                common = json.load(open("app/data/common_pfz.json"))
-                for zone in common:
-                    if zone["name"].lower() in user_query.lower() or zone["region"].lower() in user_query.lower():
-                        lat, lon = zone["lat"], zone["lon"]
-                        break
-            except Exception:
-                pass
-            if lat is None or lon is None:
-                if plan.get("location_query"):
-                    try:
-                        lat, lon = await resolve_location(plan["location_query"])
-                    except ValueError as e:
-                        return {"error": str(e), "detected_language": language}
-                else:
-                    return {"error": "Could not determine location. Please share your GPS or say a known harbor/zone name.", "detected_language": language}
+                lat, lon = await resolve_location(plan["location_query"])
+            except ValueError as e:
+                return {"error": str(e), "detected_language": language}
+        else:
+            return {"error": "Could not determine a location from your query.", "detected_language": language}
 
-    # --- Run tools in parallel ---
+    # Fetch only requested tools in parallel
     tools_needed = plan.get("tools_needed") or []
-    tasks = {
-        name: TOOL_REGISTRY[name](lat, lon)
-        for name in tools_needed
-        if name in TOOL_REGISTRY
-    }
-    print(f"tasks: {tasks}")
+    tasks = {name: TOOL_REGISTRY[name](lat, lon) for name in tools_needed if name in TOOL_REGISTRY}
     results = dict(zip(tasks.keys(), await asyncio.gather(*tasks.values()))) if tasks else {}
 
     response = {
         "type": "data",
-        "latitude": lat,
-        "longitude": lon,
+        "latitude": lat, "longitude": lon,
         "data": results,
         "detected_language": language,
     }
 
     if plan.get("wants_pfz_advisory"):
-        response["pfz_advisory"] = score_fishing_zone(
-            chlorophyll=results.get("chlorophyll"),
-            waves=results.get("waves"),
-        )
-
+        response["pfz_advisory"] = score_fishing_zone(chlorophyll=results.get("chlorophyll"), waves=results.get("waves"))
     if plan.get("wants_safety_advisory"):
         response["safety_advisory"] = assess_sea_safety(results.get("waves"))
 
@@ -155,29 +110,17 @@ async def handle_query(user_query: str, fallback_lat: float | None = None, fallb
 
 
 async def _synthesize_response(user_query: str, data: dict, language: str, context: str = "") -> str:
-    print(f"data for synthesize response: {data}")
-    return await call_llm(
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    f"Respond in {language}. Summarize the marine data below to answer the user's "
-                    "question clearly and helpfully. Use ONLY the numbers, verdicts, and reasons "
-                    "provided in the data — never calculate, estimate, or invent any figure not "
-                    "present in it. If a field is null or missing, say the data is unavailable "
-                    "rather than guessing. If a safety_advisory or pfz_advisory is present, state "
-                    "its verdict and reason clearly before adding extra context."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"{('Conversation history: ' + context + '\n\n') if context else ''}"
-                    f"User asked: {user_query}\n\nData: {json.dumps(data)}"
-                ),
-            },
-        ],
-        temperature=0.3,
-        max_tokens=600,
-        reasoning_effort=None,
-    )
+    messages = [
+        {"role": "system", "content": (
+            f"Respond in {language}. Summarize the marine data below to answer the user's question clearly and helpfully. "
+            "Use ONLY the numbers, verdicts, and reasons provided in the data — never calculate, estimate, or invent any figure not present. "
+            "If a field is null or missing, say the data is unavailable rather than guessing. "
+            "If a safety_advisory or pfz_advisory is present, state its verdict and reason clearly before adding extra context. "
+            "Make it readable, human-friendly, with short paragraphs or bullet points where helpful."
+        )},
+        {"role": "user", "content": (
+            f"{('Conversation history: ' + context + '\\n\\n') if context else ''}"
+            f"User asked: {user_query}\\n\\nData: {json.dumps(data)}"
+        )},
+    ]
+    return await call_llm(messages=messages, temperature=0.3, max_tokens=800, reasoning_effort=None)
