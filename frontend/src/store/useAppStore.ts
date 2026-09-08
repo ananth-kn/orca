@@ -146,7 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   weather: mockCurrentWeather,
   forecast2to3Hr: mock2to3HrForecast,
   forecastTrend: 'Waves and wind increasing after +1 hour. Return advised before 4:30 PM.',
-  
+
   activeAlert: {
     id: 'alert-1',
     type: 'CAUTION',
@@ -265,7 +265,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessionId(),
         trimmed,
         location.lat,
-        location.lon,
+        location.lng,
         language,
         userId ? parseInt(userId) : undefined
       );

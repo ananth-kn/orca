@@ -5,7 +5,6 @@ from models.base import Base
 from core.config import settings
 
 db_url = settings.effective_database_url or settings.SUPABASE_URL
-print("DATABASE URL:", db_url)
 engine = create_engine(
     db_url,
     pool_pre_ping=True
