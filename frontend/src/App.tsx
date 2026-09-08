@@ -1,4 +1,5 @@
 import { useAppStore } from './store/useAppStore';
+import { LoginGate } from './components/LoginGate';
 import { BottomNav } from './components/BottomNav';
 import { HomeScreen } from './screens/HomeScreen';
 import MapScreen from './screens/MapScreen'; import { AiScreen } from './screens/AiScreen';
@@ -11,7 +12,9 @@ export function App() {
   const { activeTab } = useAppStore();
 
   return (
-    <div className="h-[100dvh] w-full overflow-hidden bg-[#0f1535] font-['Inter',sans-serif] flex flex-col relative text-slate-100">
+    <>
+      <LoginGate />
+      <div className="h-[100dvh] w-full overflow-hidden bg-[#0f1535] font-['Inter',sans-serif] flex flex-col relative text-slate-100">
       <main className="flex-1 w-full h-full overflow-y-auto custom-scrollbar relative">
         {activeTab === 'home' && <HomeScreen />}
         {activeTab === 'map' && <MapScreen />}
@@ -24,6 +27,7 @@ export function App() {
       <BottomNav />
       <SOSModal />
     </div>
+    </>
   );
 }
 

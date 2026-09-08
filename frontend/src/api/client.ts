@@ -237,7 +237,8 @@ export const api = {
       message: string,
       lat?: number,
       lon?: number,
-      language = 'en'
+      language = 'en',
+      user_id?: number
     ) => {
       const raw = await requestRaw('/api/chat/message', {
         method: 'POST',
@@ -247,6 +248,7 @@ export const api = {
           lat,
           lon,
           language: languageToIso(language),
+          user_id,
         }),
       });
       return mapChatResponse(raw);

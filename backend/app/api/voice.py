@@ -7,6 +7,7 @@ import struct
 import requests
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
+from typing import Optional
 from pydantic import BaseModel
 from typing import Optional
 from core.config import settings
@@ -186,18 +187,28 @@ async def text_to_speech(text: str = Form(...)):
 
 
 @router.post("/chat", response_model=VoiceChatResponse)
-async def voice_chat_text_only(audio: UploadFile = File(...), lang: str = "hi"):
+async def voice_chat_text_only(audio: UploadFile = File(...), lang: str = "hi", user_id: Optional[int] = None):
     """
     STT + LLM only (returns text, no audio) — useful for debugging the pipeline.
     """
     audio_bytes = await audio.read()
     user_text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
     answer_text = _generate_answer(user_text, lang)
+    # Link to user DB
+    try:
+        from core.database import SessionLocal
+        from models.chat import ChatHistory
+        db = SessionLocal()
+        db.add(ChatHistory(session_id=f"voice_text_{lang}", role="user", language=lang, message=user_text, user_id=user_id))
+        db.add(ChatHistory(session_id=f"voice_text_{lang}", role="assistant", language=lang, message=answer_text, user_id=user_id))
+        db.commit(); db.close()
+    except Exception:
+        pass
     return VoiceChatResponse(user_text=user_text, answer_text=answer_text)
 
 
 @router.post("/chat/audio")
-async def voice_chat(audio: UploadFile = File(...), lang: str = "hi"):
+async def voice_chat(audio: UploadFile = File(...), lang: str = "hi", user_id: Optional[int] = None):
     """
     Full pipeline: audio in -> STT -> Sarvam LLM -> TTS -> audio out.
     """
@@ -213,6 +224,19 @@ async def voice_chat(audio: UploadFile = File(...), lang: str = "hi"):
 
     answer_audio = _synthesize(answer_text)
     t4 = time.perf_counter()
+
+    # Link voice interaction to user in DB
+    try:
+        from sqlalchemy.orm import Session
+        from core.database import SessionLocal
+        from models.chat import ChatHistory
+        db = SessionLocal()
+        db.add(ChatHistory(session_id=f"voice_{lang}_{int(t0)}", role="user", language=lang, message=user_text, user_id=user_id))
+        db.add(ChatHistory(session_id=f"voice_{lang}_{int(t0)}", role="assistant", language=lang, message=answer_text, user_id=user_id))
+        db.commit()
+        db.close()
+    except Exception:
+        pass
 
     print(
         f"[voice/chat/audio] read={t1-t0:.2f}s "

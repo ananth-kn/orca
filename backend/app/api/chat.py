@@ -8,6 +8,7 @@ import json
 from core.database import get_db
 from core.config import settings
 from models.chat import ChatHistory
+from models.user import User
 from app.agents.planner import handle_query
 
 router = APIRouter(prefix="/api/chat", tags=["AI Conversational & Voice"])
@@ -19,6 +20,7 @@ class ChatMessageRequest(BaseModel):
     message: str
     lat: Optional[float] = None
     lon: Optional[float] = None
+    user_id: Optional[int] = None
 
 class ChatMessageResponse(BaseModel):
     session_id: str
@@ -35,14 +37,24 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
     Endpoint for conversational advisory queries.
     Routes through the planner agent (Sarvam-105B routing + tools + synthesis).
     """
-    session_id = req.session_id or str(uuid.uuid4())
+    # Load user's language preference if provided
+    lang = req.language
+    if req.user_id:
+        try:
+            user = db.query(User).filter(User.id == req.user_id).first()
+            if user and user.language:
+                lang = user.language
+        except Exception:
+            pass
 
+    session_id = req.session_id or str(uuid.uuid4())
     # Log user message
     user_log = ChatHistory(
         session_id=session_id,
         role="user",
-        language=req.language,
+        language=lang,
         message=req.message,
+        user_id=req.user_id,
     )
     db.add(user_log)
     db.commit()
@@ -98,6 +110,7 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
         role="assistant",
         language=detected_language,
         message=reply_text,
+        user_id=req.user_id,
     )
     db.add(asst_log)
     db.commit()

@@ -127,7 +127,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   isSOSOpen: false,
   setSOSOpen: (open) => set({ isSOSOpen: open }),
 
-  language: 'English',
+  language: (() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('orca_lang') : null;
+    return saved || 'English';
+  })(),
   setLanguage: (lang) => set({ language: lang }),
 
   location: {
@@ -243,7 +246,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sendChat: async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-
+    const userId = typeof window !== 'undefined' ? localStorage.getItem('orca_user_id') : null;
     const { location, language, chatMessages } = get();
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
@@ -262,8 +265,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessionId(),
         trimmed,
         location.lat,
-        location.lng,
-        language
+        location.lon,
+        language,
+        userId ? parseInt(userId) : undefined
       );
 
       set({

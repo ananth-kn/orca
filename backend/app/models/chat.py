@@ -11,4 +11,5 @@ class ChatHistory(Base):
     language = Column(String(50), default="en")
     message = Column(Text, nullable=False)
     audio_url = Column(String(500), nullable=True)
+    user_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
