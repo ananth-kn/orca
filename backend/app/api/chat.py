@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -13,6 +13,8 @@ from app.agents.planner import handle_query
 
 router = APIRouter(prefix="/api/chat", tags=["AI Conversational & Voice"])
 
+MAX_MESSAGE_LENGTH = 2000
+
 
 class ChatMessageRequest(BaseModel):
     session_id: Optional[str] = None
@@ -22,23 +24,34 @@ class ChatMessageRequest(BaseModel):
     lon: Optional[float] = None
     user_id: Optional[int] = None
 
+
 class ChatMessageResponse(BaseModel):
     session_id: str
     language: str
-    response: str          # renamed from "reply"
+    response: str
     provider: str
     data: Optional[dict] = None
 
 
 @router.post("/message", response_model=ChatMessageResponse)
 async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_db)):
-    print("/api/chat/message")
-    """
-    Endpoint for conversational advisory queries.
-    Routes through the planner agent (Sarvam-105B routing + tools + synthesis).
-    """
-    # Load user's language preference if provided
-    lang = req.language
+    if not req.message or not req.message.strip():
+        return ChatMessageResponse(
+            session_id=req.session_id or str(uuid.uuid4()),
+            language=req.language or "en",
+            response="I didn't receive a question. How can I help you?",
+            provider="orca",
+        )
+
+    if len(req.message) > MAX_MESSAGE_LENGTH:
+        return ChatMessageResponse(
+            session_id=req.session_id or str(uuid.uuid4()),
+            language=req.language or "en",
+            response="Your message is too long. Please keep it under 2000 characters.",
+            provider="orca",
+        )
+
+    lang = req.language or "en"
     if req.user_id:
         try:
             user = db.query(User).filter(User.id == req.user_id).first()
@@ -48,91 +61,101 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
             pass
 
     session_id = req.session_id or str(uuid.uuid4())
-    # Log user message
-    user_log = ChatHistory(
-        session_id=session_id,
-        role="user",
-        language=lang,
-        message=req.message,
-        user_id=req.user_id,
-    )
-    db.add(user_log)
-    db.commit()
 
     if not settings.SARVAM_API_KEY:
         reply_text = (
-            f"Marine Advisory Assistant ({req.language.upper()}): "
-            f"Received your query '{req.message}'. "
-            "Please configure SARVAM_API_KEY in .env to enable full Sarvam 105B generation."
+            "ORCA is not fully configured. Please set SARVAM_API_KEY "
+            "in the environment to enable the AI assistant."
         )
-        asst_log = ChatHistory(
-            session_id=session_id, role="assistant",
-            language=req.language, message=reply_text,
-        )
-        db.add(asst_log)
-        db.commit()
         return ChatMessageResponse(
-            session_id=session_id, language=req.language,
-            response=reply_text, provider="mock-mvp",
+            session_id=session_id,
+            language=lang,
+            response=reply_text,
+            provider="config-error",
         )
 
     try:
-        # Load multi-turn history for memory (
+        user_log = ChatHistory(
+            session_id=session_id,
+            role="user",
+            language=lang,
+            message=req.message,
+            user_id=req.user_id,
+        )
+        db.add(user_log)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    try:
         history = (
             db.query(ChatHistory)
             .filter(ChatHistory.session_id == session_id)
-            .order_by(ChatHistory.created_at.asc())
-            .limit(10)
+            .order_by(ChatHistory.created_at.desc())
+            .limit(8)
             .all()
         )
-        prior_context = " ".join(
-            f"{h.role}: {h.message}" for h in history[-6:] if h.role in ("user", "assistant")
-        )
+        history.reverse()
+
+        context_parts = []
+        for h in history[:-1]:
+            role = "User" if h.role == "user" else "ORCA"
+            context_parts.append(f"{role}: {h.message}")
+        prior_context = "\n".join(context_parts[-6:])
+
         result = await handle_query(
-            req.message,
+            user_text=req.message,
             fallback_lat=req.lat,
             fallback_lon=req.lon,
             context=prior_context,
+            lang=lang,
+            session_id=session_id,
+            user_id=req.user_id,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Planner pipeline failed: {e}")
+        return ChatMessageResponse(
+            session_id=session_id,
+            language=lang,
+            response=f"I'm having trouble processing your request right now. Please try again shortly.",
+            provider="error",
+        )
 
     if "error" in result:
-        reply_text = result["error"]
+        reply_text = result.get("summary", "Sorry, an error occurred.")
     else:
-        reply_text = result.get("summary") or "Sorry, I couldn't generate a response."
-    print(reply_text)
-    detected_language = result.get("detected_language", req.language)
+        reply_text = result.get("summary", "Sorry, I couldn't generate a response.")
 
-    # Log assistant response (store full structured result as JSON for debugging/audit)
-    asst_log = ChatHistory(
-        session_id=session_id,
-        role="assistant",
-        language=detected_language,
-        message=reply_text,
-        user_id=req.user_id,
-    )
-    db.add(asst_log)
-    db.commit()
+    detected_language = result.get("detected_language", lang)
+
+    try:
+        asst_log = ChatHistory(
+            session_id=session_id,
+            role="assistant",
+            language=detected_language,
+            message=reply_text,
+            user_id=req.user_id,
+        )
+        db.add(asst_log)
+        db.commit()
+    except Exception:
+        db.rollback()
 
     return ChatMessageResponse(
         session_id=session_id,
         language=detected_language,
         response=reply_text,
         provider="sarvam-105b",
-        data={k: v for k, v in result.items() if k != "summary"},
+        data=result.get("data"),
     )
 
 
 @router.get("/history/{session_id}")
 def get_chat_history(session_id: str, db: Session = Depends(get_db)):
-    """
-    Retrieve message history for a specific session.
-    """
     logs = (
         db.query(ChatHistory)
         .filter(ChatHistory.session_id == session_id)
         .order_by(ChatHistory.created_at.asc())
+        .limit(50)
         .all()
     )
     return [

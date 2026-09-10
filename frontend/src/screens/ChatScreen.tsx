@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Radio, Send, Signal } from 'lucide-react';
+import { ArrowLeft, Radio, Send, Signal, Mic } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 
 interface Message {
@@ -41,6 +41,7 @@ export const ChatScreen: React.FC = () => {
   const { setActiveTab } = useAppStore();
   const [messages, setMessages] = useState<Message[]>(mockMessages);
   const [input, setInput] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
 
   const handleSend = () => {
     if (!input.trim()) return;
@@ -55,12 +56,17 @@ export const ChatScreen: React.FC = () => {
     setInput('');
   };
 
+  const handleMicPress = () => {
+    // Voice recording placeholder — integrates with device microphone
+    setIsRecording((prev) => !prev);
+  };
+
   return (
     <div className="flex flex-col h-screen bg-[#0f1535] text-white pb-20">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-4 border-b border-white/[0.08] bg-[#0f1535]/80 backdrop-blur-md sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <button 
+          <button
             onClick={() => setActiveTab('home')}
             className="p-2 rounded-xl bg-white/[0.05] border border-white/[0.08] text-white hover:bg-white/[0.1] active:bg-white/[0.15] transition-colors"
           >
@@ -94,10 +100,10 @@ export const ChatScreen: React.FC = () => {
                 )}
               </div>
             )}
-            <div 
+            <div
               className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                msg.isMe 
-                  ? 'bg-blue-600 text-white rounded-br-sm' 
+                msg.isMe
+                  ? 'bg-blue-600 text-white rounded-br-sm'
                   : 'bg-white/[0.08] border border-white/[0.05] text-white/90 rounded-bl-sm'
               }`}
             >
@@ -108,9 +114,22 @@ export const ChatScreen: React.FC = () => {
         ))}
       </div>
 
-      {/* Input Area */}
-      <div className="px-4 py-4 bg-[#0f1535] border-t border-white/[0.08] mt-auto">
-        <div className="flex items-center gap-3">
+      {/* Input Area — fixed at bottom */}
+      <div className="px-4 py-4 bg-[#0f1535] border-t border-white/[0.08] shrink-0">
+        <div className="flex items-center gap-2">
+          {/* Mic button */}
+          <button
+            onClick={handleMicPress}
+            className={`shrink-0 p-3.5 rounded-2xl transition-all ${
+              isRecording
+                ? 'bg-red-500 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.4)]'
+                : 'bg-white/[0.06] border border-white/[0.1] text-blue-400'
+            }`}
+          >
+            <Mic size={20} />
+          </button>
+
+          {/* Text input */}
           <input
             type="text"
             value={input}
@@ -119,6 +138,8 @@ export const ChatScreen: React.FC = () => {
             placeholder="Message fleet..."
             className="flex-1 bg-white/[0.05] border border-white/[0.1] rounded-2xl px-4 py-3.5 text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-white/[0.2] transition-colors"
           />
+
+          {/* Send button */}
           <button
             onClick={handleSend}
             disabled={!input.trim()}

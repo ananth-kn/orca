@@ -64,8 +64,6 @@ DATASET_ID = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
 
 
 def _fetch_chlorophyll_sync(lat: float, lon: float):
-    print("fetch chlorophyll sync")
-
     end_date = datetime.utcnow()
     start_date = end_date - timedelta(days=7)
 
@@ -174,7 +172,6 @@ def _fetch_chlorophyll_sync(lat: float, lon: float):
 
 
 async def get_chlorophyll(lat: float, lon: float):
-    print("get chlorophyll")
     try:
         value, data_time = await asyncio.to_thread(_fetch_chlorophyll_sync, lat, lon)
     except Exception as e:
@@ -204,8 +201,6 @@ def _empty_result(lat, lon, message):
 async def chlorophyll(lat: float = Query(...), lon: float = Query(...)):
     return await get_chlorophyll(lat, lon)
 
-
-now = datetime.now(timezone.utc)
 
 WAVE_DATASET_ID = "cmems_mod_glo_wav_anfc_0.083deg_PT3H-i"
 
@@ -333,7 +328,6 @@ async def get_waves_and_sea_state(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude")
 ):
-    print("get waves")
     """
     Get live wave height, direction, swell period, and boat safety index.
     Source: Copernicus Marine Global Wave Forecast (MFWAM model).
@@ -341,7 +335,6 @@ async def get_waves_and_sea_state(
     try:
         data = await asyncio.to_thread(_fetch_waves_sync, lat, lon)
     except Exception as e:
-        print(f"Copernicus wave request failed: {e}")
         return {
             "latitude": lat, "longitude": lon,
             "wave_height_m": None, "wave_direction_deg": None,
@@ -429,7 +422,6 @@ async def get_full_marine_advisory(
     wave_val = params.get("waves", {}).get("wave_height_meters")
     safety_color = advisory.get("marine_safety_index", "GREEN")
 
-    # Cache into database
     try:
         cache_entry = AdvisoryCache(
             location_name=req.location_name or f"Zone ({req.latitude:.2f}, {req.longitude:.2f})",
@@ -443,7 +435,7 @@ async def get_full_marine_advisory(
         )
         db.add(cache_entry)
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
 
     return advisory
@@ -451,22 +443,3 @@ async def get_full_marine_advisory(
 
 # Alias for planner tools linkage
 get_waves_and_swell = get_waves_and_sea_state
-
-from app.agents.pfz_scoring import score_fishing_zone
-
-
-@router.get("/pfz")
-async def pfz(lat: float = Query(...), lon: float = Query(...)):
-    chl, waves = await asyncio.gather(
-        get_chlorophyll(lat, lon),
-        get_waves_and_swell(lat, lon),
-    )
-    score = score_fishing_zone(chlorophyll=chl, waves=waves)
-    return {
-        "lat": lat,
-        "lon": lon,
-        "pfz_potential": score.get("chlorophyll_rating"),
-        "composite_score": score.get("confidence"),
-        "recommendation": "Recommended" if score.get("is_potential_zone") else "Not recommended",
-        "layers": {"chlorophyll": chl, "waves": waves},
-    }

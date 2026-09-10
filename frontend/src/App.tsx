@@ -10,8 +10,7 @@ import { WeatherScreen } from './screens/WeatherScreen';
 import { SOSModal } from './components/SOSModal';
 
 export function App() {
-  const { activeTab } = useAppStore();
-  const userId = typeof window !== 'undefined' ? localStorage.getItem('orca_user_id') : null;
+  const { activeTab, userId } = useAppStore();
   if (!userId) return <LoginScreen />;
 
   return (

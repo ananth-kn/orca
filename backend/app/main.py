@@ -49,15 +49,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# # CORS configuration for independent frontend deployment (Vercel, localhost, etc.)
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS != ["*"] else ["*"],
-#     allow_origin_regex=r"^https?:\/\/.*",
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
 
 # Mount API Routers
 app.include_router(marine_router)

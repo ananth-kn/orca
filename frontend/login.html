@@ -8,7 +8,7 @@ button{width:100%;padding:.7rem;border:none;border-radius:.5rem;background:#2563
 button:hover{background:#1d4ed8}</style>
 </head>
 <body>
-<form onsubmit="event.preventDefault(); const n=document.getElementById('name').value; const l=document.getElementById('lang').value; fetch('http://localhost:8000/api/user/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,language:l})}).then(r=>r.json()).then(j=>{localStorage.setItem('orca_user_id', j.id); localStorage.setItem('orca_lang', j.language); alert('Welcome '+j.name+'! Language set to '+j.language); window.location.href='http://localhost:5173/';});">
+<form onsubmit="event.preventDefault(); const n=document.getElementById('name').value; const l=document.getElementById('lang').value; fetch('http://localhost:8000/api/user/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,language:l})}).then(r=>r.json()).then(j=>{localStorage.setItem('orca_user_id', j.id); localStorage.setItem('orca_lang', j.language); alert('Welcome '+j.name+'! Language set to '+j.language); window.location.href='http://localhost:5174/';});">
 <h2>ORCA — Welcome Fisherman</h2>
 <p style="font-size:.85rem;color:#aaa">No password needed. Just enter your name.</p>
 <input id="name" placeholder="Your name" required>

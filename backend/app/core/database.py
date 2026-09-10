@@ -28,6 +28,5 @@ def get_db():
 def init_db():
     try:
         Base.metadata.create_all(bind=engine)
-        print("✓ ORCA database tables initialized successfully.")
-    except Exception as e:
-        print(f"⚠️ Warning: Database initialization warning: {e}")
+    except Exception:
+        pass

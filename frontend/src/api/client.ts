@@ -15,8 +15,6 @@ import {
 } from './adapters';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
-
-console.log("ORCA BASE_URL =", BASE_URL);
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
@@ -123,10 +121,43 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * Structured data the backend sends alongside the text summary.
+ * The backend returns everything from the planner pipeline in `data`:
+ *   - type: "data" | "static"
+ *   - latitude, longitude
+ *   - data: tool results keyed by tool name (sst, chlorophyll, waves, weather_forecast)
+ *   - pfz_advisory: { is_potential_zone, chlorophyll_rating, confidence, ... }
+ *   - safety_advisory: { verdict, reason, wave_height_m }
+ *   - detected_language
+ */
+export interface ChatStructuredData {
+  type?: 'data' | 'static';
+  latitude?: number;
+  longitude?: number;
+  detected_language?: string;
+  /** Tool results keyed by tool name: sst, chlorophyll, waves, weather_forecast */
+  data?: Record<string, Record<string, unknown>>;
+  pfz_advisory?: {
+    is_potential_zone?: boolean;
+    chlorophyll_rating?: string;
+    chlorophyll_value?: number;
+    wave_height_m?: number;
+    confidence?: string;
+  };
+  safety_advisory?: {
+    verdict?: string;
+    reason?: string;
+    wave_height_m?: number;
+  };
+}
+
 export interface ChatResponse {
   session_id: string;
   response: string;
   language?: string;
+  /** Structured data from the backend planner pipeline */
+  data?: ChatStructuredData;
 }
 
 function mapSst(raw: Record<string, unknown>): SSTResponse {
@@ -238,7 +269,8 @@ export const api = {
       lat?: number,
       lon?: number,
       language = 'en',
-      user_id?: number
+      user_id?: number,
+      context?: string
     ) => {
       const raw = await requestRaw('/api/chat/message', {
         method: 'POST',
@@ -249,6 +281,7 @@ export const api = {
           lon,
           language: languageToIso(language),
           user_id,
+          context,
         }),
       });
       return mapChatResponse(raw);
@@ -281,7 +314,7 @@ export const api = {
     stream: async (file: File | Blob, lang = 'hi', filename = 'voice.webm') => {
       const form = new FormData();
       form.append('audio', file, filename);
-      return fetch(`${BASE_URL}/api/voice/chat/audio/stream?lang=${lang}`, {
+      return fetch(`${BASE_URL}/api/voice/chat/audio?lang=${lang}`, {
         method: 'POST',
         body: form,
       });

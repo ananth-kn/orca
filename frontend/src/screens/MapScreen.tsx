@@ -21,9 +21,9 @@ export default function MapScreen() {
   const { location, pfzs, harbors, selectedPfz, setSelectedPfz } = useAppStore();
   const [mapStyle, setMapStyle] = useState<'dark' | 'satellite'>('dark');
   const [viewState, setViewState] = useState({
-    longitude: location.lng,
-    latitude: location.lat,
-    zoom: 8,
+    longitude: location?.lng ?? 78.0,
+    latitude: location?.lat ?? 20.0,
+    zoom: 5.5,
     pitch: 0,
     bearing: 0
   });
@@ -36,6 +36,7 @@ export default function MapScreen() {
   const selectedData = selectedPfz ? pfzs.find(p => p.id === selectedPfz) : null;
 
   const restrictedZoneGeojson = useMemo(() => {
+    if (!location) return null;
     const center = [location.lng + 0.1, location.lat + 0.1];
     const points = 64;
     const radiusInKm = 5;
@@ -59,7 +60,7 @@ export default function MapScreen() {
         properties: {}
       }]
     };
-  }, [location.lat, location.lng]);
+  }, [location?.lat, location?.lng]);
 
   const restrictedZoneLineLayer: LayerProps = {
     id: 'restricted-zone-line',
@@ -112,19 +113,23 @@ export default function MapScreen() {
         >
           <NavigationControl position="top-left" showCompass showZoom />
 
-          <Source id="restricted-zone" type="geojson" data={restrictedZoneGeojson as any}>
-            <Layer {...restrictedZoneFillLayer} />
-            <Layer {...restrictedZoneLineLayer} />
-          </Source>
+          {restrictedZoneGeojson && (
+            <Source id="restricted-zone" type="geojson" data={restrictedZoneGeojson as any}>
+              <Layer {...restrictedZoneFillLayer} />
+              <Layer {...restrictedZoneLineLayer} />
+            </Source>
+          )}
 
-          {/* User Location Marker */}
-          <Marker longitude={location.lng} latitude={location.lat} anchor="center">
-            <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center animate-pulse">
-              <div className="w-8 h-8 rounded-full bg-blue-500/40 flex items-center justify-center">
-                <Navigation className="text-blue-400 w-5 h-5" style={{ transform: `rotate(${location.headingDeg}deg)` }} />
+          {/* User Location Marker (only if live GPS is available) */}
+          {location && (
+            <Marker longitude={location.lng} latitude={location.lat} anchor="center">
+              <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center animate-pulse">
+                <div className="w-8 h-8 rounded-full bg-blue-500/40 flex items-center justify-center">
+                  <Navigation className="text-blue-400 w-5 h-5" style={{ transform: `rotate(${location.headingDeg}deg)` }} />
+                </div>
               </div>
-            </div>
-          </Marker>
+            </Marker>
+          )}
 
           {/* Harbor Markers */}
           {harbors.map((harbor) => (
@@ -261,8 +266,8 @@ export default function MapScreen() {
                 </div>
               )}
 
-              <button className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-colors shadow-[0_0_20px_rgba(37,99,235,0.3)]">
-                START ROUTE
+              <button className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-2xl transition-colors active:scale-[0.98]">
+                Start Navigation
               </button>
             </div>
           </div>

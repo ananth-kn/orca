@@ -1,254 +1,316 @@
 import io
-import os
-from urllib.parse import quote
-import time
 import re
-import struct
-import requests
+import httpx
+from urllib.parse import quote
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
-from typing import Optional
 from pydantic import BaseModel
 from typing import Optional
 from core.config import settings
+
 router = APIRouter(prefix="/api/voice", tags=["Voice Assistant"])
 
-# ---------------------------------------------------------
-# Config — move these into core.config / env vars for prod
-# ---------------------------------------------------------
 KAGGLE_STT_TTS_URL = settings.KAGGLE_STT_TTS_URL or "https://unsilent-sherlene-jurisdictionally.ngrok-free.dev"
-SARVAM_API_KEY = settings.SARVAM_API_KEY
-SARVAM_CHAT_URL = "https://api.sarvam.ai/v1/chat/completions"
-SARVAM_MODEL = "sarvam-105b"
-
 NGROK_HEADERS = {"ngrok-skip-browser-warning": "true"}
 
-ORCA_SYSTEM_PROMPT = (
-    "You are ORCA, a marine safety and fishing assistant for Indian fishermen. "
-    "Answer in the user's language ({lang}). Provide explainable, context-aware recommendations "
-    "that reference actual data (SST, chlorophyll, waves, forecast, alerts, tide, geography). "
-    "Use the data provided — never invent figures. Keep answers practical and spoken-friendly, "
-    "but you may use 2-4 sentences when explaining reasoning or comparing conditions. "
-    "Always state which source/data supports your recommendation."
-)
+MAX_AUDIO_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_TTS_TEXT_LENGTH = 1000
 
 
-# ---------------------------------------------------------
-# Response Schemas
-# ---------------------------------------------------------
 class TranscriptResponse(BaseModel):
     text: str
     lang: str
+
 
 class VoiceChatResponse(BaseModel):
     user_text: str
     answer_text: str
 
 
-# ---------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------
-def _transcribe(audio_bytes: bytes, filename: str, lang: str) -> str:
-    try:
-        res = requests.post(
-            f"{KAGGLE_STT_TTS_URL}/stt",
-            files={"audio": (filename, audio_bytes)},
-            params={"lang": lang},
-            headers=NGROK_HEADERS,
-            timeout=60,
-        )
-        res.raise_for_status()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"STT service unreachable: {e}")
-    return res.json()["text"]
-
-
-def _generate_answer(user_text: str, lang: str) -> str:
-    # Delegate to agent pipeline: planner decides intent, fetches data, synthesizes
-    import asyncio
-    try:
-        from app.agents.planner import handle_query
-        result = asyncio.get_event_loop().run_until_complete(
-            handle_query(user_text, fallback_lat=None, fallback_lon=None, context="")
-        )
-        if "error" in result:
-            return f"Sorry, I could not process that: {result['error']}"
-        return result.get("summary", "Response unavailable.")
-    except Exception as e:
-        # Fallback to original Sarvam direct if planner fails
-        if not SARVAM_API_KEY:
-            raise HTTPException(status_code=500, detail="SARVAM_API_KEY not configured")
+async def _transcribe(audio_bytes: bytes, filename: str, lang: str) -> str:
+    """STT via Kaggle notebook - async"""
+    if not KAGGLE_STT_TTS_URL or KAGGLE_STT_TTS_URL.startswith("https://unsilent"):
+        raise ValueError("KAGGLE_STT_TTS_URL not properly configured")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
         try:
-            res = requests.post(
-                SARVAM_CHAT_URL,
-                headers={
-                    "api-subscription-key": SARVAM_API_KEY,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": SARVAM_MODEL,
-                    "messages": [
-                        {"role": "system", "content": ORCA_SYSTEM_PROMPT.format(lang=lang)},
-                        {"role": "user", "content": user_text},
-                    ],
-                    "reasoning_effort": None,
-                    "max_tokens": 300,
-                },
-                timeout=30,
+            res = await client.post(
+                f"{KAGGLE_STT_TTS_URL}/stt",
+                files={"audio": (filename, audio_bytes)},
+                params={"lang": lang},
+                headers=NGROK_HEADERS,
             )
             res.raise_for_status()
-            return res.json()["choices"][0]["message"]["content"]
-        except requests.RequestException as e:
-            raise HTTPException(status_code=502, detail=f"LLM service unreachable: {e}")
+            data = res.json()
+            return data.get("text", "")
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Speech recognition timed out")
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Speech recognition failed: {str(e)}")
 
 
-def _synthesize(text: str) -> bytes:
+def _prepare_text_for_tts(text: str) -> str:
+    """Sanitize text for natural TTS synthesis"""
+    # Remove markdown formatting
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # bold
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)      # italic
+    text = re.sub(r'`([^`]+)`', r'\1', text)        # code
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)  # links
+    
+    # Remove URLs
+    text = re.sub(r'https?://\S+', '', text)
+    
+    # Normalize punctuation
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\.{2,}', '.', text)
+    text = re.sub(r'\?{2,}', '?', text)
+    text = re.sub(r'!{2,}', '!', text)
+    
+    # Ensure sentence-ending punctuation for natural pauses
+    text = text.strip()
+    if text and text[-1] not in '.!?':
+        text += '.'
+    
+    return text
+
+
+async def _synthesize(text: str, lang: str = "en") -> bytes:
+    """TTS via Kaggle notebook - async with text sanitization"""
+    if not KAGGLE_STT_TTS_URL or KAGGLE_STT_TTS_URL.startswith("https://unsilent"):
+        raise ValueError("KAGGLE_STT_TTS_URL not properly configured")
+    
+    # Sanitize and validate
+    clean_text = _prepare_text_for_tts(text)
+    
+    if len(clean_text) > MAX_TTS_TEXT_LENGTH:
+        # Truncate at sentence boundary
+        sentences = re.split(r'([.!?])\s+', clean_text[:MAX_TTS_TEXT_LENGTH])
+        clean_text = ''.join(sentences[:-1]) if len(sentences) > 1 else sentences[0]
+        if clean_text and clean_text[-1] not in '.!?':
+            clean_text += '.'
+    
+    if not clean_text:
+        clean_text = "Sorry, I have no response."
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            res = await client.post(
+                f"{KAGGLE_STT_TTS_URL}/tts",
+                data={"text": clean_text, "lang": lang},
+                headers=NGROK_HEADERS,
+            )
+            res.raise_for_status()
+            return res.content
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Speech synthesis timed out")
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {str(e)}")
+
+
+async def _generate_answer(
+    user_text: str,
+    lang: str,
+    session_id: str,
+    user_id: Optional[int] = None,
+) -> str:
+    """Call canonical conversational pipeline (same as text chat)"""
     try:
-        res = requests.post(
-            f"{KAGGLE_STT_TTS_URL}/tts",
-            data={"text": text},
-            headers=NGROK_HEADERS,
-            timeout=60,
+        from app.agents.planner import handle_query
+        
+        result = await handle_query(
+            user_text=user_text,
+            fallback_lat=None,
+            fallback_lon=None,
+            context="",
+            lang=lang,
+            session_id=session_id,
+            user_id=user_id,
         )
-        res.raise_for_status()
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"TTS service unreachable: {e}")
-    return res.content
+        
+        if "error" in result:
+            return f"Sorry, {result.get('summary', 'I could not process that request.')}"
+        
+        answer = result.get("summary", "I don't have a response right now.")
+        
+        # Keep voice responses concise
+        sentences = re.split(r'([.!?])\s+', answer)
+        if len(sentences) > 10:
+            # Keep first ~6 sentences for voice
+            answer = ''.join(sentences[:13])  # 6 sentences + 6 punctuation + start
+            if answer and answer[-1] not in '.!?':
+                answer += '.'
+        
+        return answer
+        
+    except Exception as e:
+        return "Sorry, I'm experiencing a technical issue. Please try again shortly."
 
-
-# ---------------------------------------------------------
-# Routes
-# ---------------------------------------------------------
-import struct  # already imported
-
-SENTENCE_SPLIT_RE = re.compile(r'(?<=[।.!?])\s+')
-
-def split_sentences(text: str):
-    parts = [p.strip() for p in SENTENCE_SPLIT_RE.split(text) if p.strip()]
-    return parts if parts else [text]
-
-def _synthesize_stream_frames(sentences):
-    for sent in sentences:
-        t0 = time.perf_counter()
-        audio_bytes = _synthesize(sent)
-        print(f"[tts-chunk] '{sent[:30]}' -> {time.perf_counter()-t0:.2f}s")
-        yield struct.pack(">I", len(audio_bytes)) + audio_bytes
-
-
-@router.post("/chat/audio")
-async def voice_chat_audio_full(audio: UploadFile = File(...), lang: str = "hi"):
-    """Full pipeline (non-streaming): STT → Sarvam LLM → TTS → single audio blob."""
-    audio_bytes = await audio.read()
-    user_text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
-    answer_text = _generate_answer(user_text, lang)
-    answer_audio = _synthesize(answer_text)
-    return StreamingResponse(io.BytesIO(answer_audio), media_type="audio/wav",
-                             headers={"X-User-Text": quote(user_text), "X-Answer-Text": quote(answer_text)})
-
-
-@router.post("/chat/audio/stream")
-async def voice_chat_stream(audio: UploadFile = File(...), lang: str = "hi"):
-    t0 = time.perf_counter()
-    audio_bytes = await audio.read()
-    user_text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
-    t1 = time.perf_counter()
-    answer_text = _generate_answer(user_text, lang)
-    t2 = time.perf_counter()
-    print(f"[stream] stt={t1-t0:.2f}s llm={t2-t1:.2f}s answer='{answer_text}'")
-
-    sentences = split_sentences(answer_text)
-
-    return StreamingResponse(
-        _synthesize_stream_frames(sentences),
-        media_type="application/octet-stream",
-        headers={
-            "X-User-Text": quote(user_text),
-            "X-Answer-Text": quote(answer_text),
-        },
-    )
 
 @router.post("/stt", response_model=TranscriptResponse)
 async def speech_to_text(audio: UploadFile = File(...), lang: str = "hi"):
-    """
-    Transcribe uploaded audio using the AI4Bharat STT model hosted on Kaggle.
-    """
+    """Speech-to-text endpoint"""
     audio_bytes = await audio.read()
-    text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
-    return TranscriptResponse(text=text, lang=lang)
+    
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(status_code=413, detail="Audio file too large")
+    
+    if len(audio_bytes) < 100:
+        raise HTTPException(status_code=400, detail="Audio file too small or empty")
+    
+    text = await _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
+    
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Could not transcribe audio")
+    
+    return TranscriptResponse(text=text.strip(), lang=lang)
 
 
 @router.post("/tts")
-async def text_to_speech(text: str = Form(...)):
-    """
-    Synthesize speech from text using the AI4Bharat TTS model hosted on Kaggle.
-    """
-    audio_bytes = _synthesize(text)
+async def text_to_speech(text: str = Form(...), lang: str = Form("en")):
+    """Text-to-speech endpoint"""
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="No text provided")
+    
+    audio_bytes = await _synthesize(text, lang)
+    
+    if not audio_bytes or len(audio_bytes) < 100:
+        raise HTTPException(status_code=502, detail="TTS returned invalid audio")
+    
     return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav")
 
 
-@router.post("/chat", response_model=VoiceChatResponse)
-async def voice_chat_text_only(audio: UploadFile = File(...), lang: str = "hi", user_id: Optional[int] = None):
-    """
-    STT + LLM only (returns text, no audio) — useful for debugging the pipeline.
-    """
-    audio_bytes = await audio.read()
-    user_text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
-    answer_text = _generate_answer(user_text, lang)
-    # Link to user DB
-    try:
-        from core.database import SessionLocal
-        from models.chat import ChatHistory
-        db = SessionLocal()
-        db.add(ChatHistory(session_id=f"voice_text_{lang}", role="user", language=lang, message=user_text, user_id=user_id))
-        db.add(ChatHistory(session_id=f"voice_text_{lang}", role="assistant", language=lang, message=answer_text, user_id=user_id))
-        db.commit(); db.close()
-    except Exception:
-        pass
-    return VoiceChatResponse(user_text=user_text, answer_text=answer_text)
-
-
 @router.post("/chat/audio")
-async def voice_chat(audio: UploadFile = File(...), lang: str = "hi", user_id: Optional[int] = None):
+async def voice_chat_audio_full(
+    audio: UploadFile = File(...),
+    lang: str = "hi",
+    user_id: Optional[int] = None,
+):
     """
-    Full pipeline: audio in -> STT -> Sarvam LLM -> TTS -> audio out.
+    Complete voice pipeline: STT → canonical planner → TTS → single complete WAV
+    This is the primary voice endpoint for the mobile app.
     """
-    t0 = time.perf_counter()
     audio_bytes = await audio.read()
-
-    t1 = time.perf_counter()
-    user_text = _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
-    t2 = time.perf_counter()
-
-    answer_text = _generate_answer(user_text, lang)
-    t3 = time.perf_counter()
-
-    answer_audio = _synthesize(answer_text)
-    t4 = time.perf_counter()
-
-    # Link voice interaction to user in DB
+    
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(status_code=413, detail="Audio file too large")
+    
+    if len(audio_bytes) < 100:
+        raise HTTPException(status_code=400, detail="Audio file too small or empty")
+    
+    # STT
     try:
-        from sqlalchemy.orm import Session
+        user_text = await _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Transcription failed: {str(e)}")
+    
+    if not user_text or not user_text.strip():
+        raise HTTPException(status_code=400, detail="Could not transcribe audio")
+    
+    user_text = user_text.strip()
+    
+    # Generate session ID for voice context
+    import time
+    session_id = f"voice_{lang}_{user_id or 'anon'}_{int(time.time())}"
+    
+    # Conversational pipeline (same as text)
+    try:
+        answer_text = await _generate_answer(user_text, lang, session_id, user_id)
+    except Exception as e:
+        answer_text = "Sorry, I encountered an issue processing your request."
+    
+    # TTS
+    try:
+        answer_audio = await _synthesize(answer_text, lang)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Speech synthesis failed: {str(e)}")
+    
+    # Log to database (best effort, non-blocking)
+    try:
         from core.database import SessionLocal
         from models.chat import ChatHistory
+        
         db = SessionLocal()
-        db.add(ChatHistory(session_id=f"voice_{lang}_{int(t0)}", role="user", language=lang, message=user_text, user_id=user_id))
-        db.add(ChatHistory(session_id=f"voice_{lang}_{int(t0)}", role="assistant", language=lang, message=answer_text, user_id=user_id))
+        db.add(ChatHistory(
+            session_id=session_id,
+            role="user",
+            language=lang,
+            message=user_text,
+            user_id=user_id,
+        ))
+        db.add(ChatHistory(
+            session_id=session_id,
+            role="assistant",
+            language=lang,
+            message=answer_text,
+            user_id=user_id,
+        ))
         db.commit()
         db.close()
     except Exception:
         pass
-
-    print(
-        f"[voice/chat/audio] read={t1-t0:.2f}s "
-        f"stt={t2-t1:.2f}s llm={t3-t2:.2f}s tts={t4-t3:.2f}s "
-        f"total={t4-t0:.2f}s"
-    )
-
+    
     return StreamingResponse(
         io.BytesIO(answer_audio),
         media_type="audio/wav",
         headers={
-            "X-User-Text": quote(user_text),
-            "X-Answer-Text": quote(answer_text),
+            "X-User-Text": quote(user_text[:500]),
+            "X-Answer-Text": quote(answer_text[:500]),
         },
     )
+
+
+@router.post("/chat")
+async def voice_chat_text_only(
+    audio: UploadFile = File(...),
+    lang: str = "hi",
+    user_id: Optional[int] = None,
+):
+    """
+    Voice chat without TTS response (returns text only).
+    Useful for testing or bandwidth-constrained scenarios.
+    """
+    audio_bytes = await audio.read()
+    
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise HTTPException(status_code=413, detail="Audio file too large")
+    
+    user_text = await _transcribe(audio_bytes, audio.filename or "voice.webm", lang)
+    
+    if not user_text or not user_text.strip():
+        raise HTTPException(status_code=400, detail="Could not transcribe audio")
+    
+    import time
+    session_id = f"voice_text_{lang}_{int(time.time())}"
+    
+    answer_text = await _generate_answer(user_text.strip(), lang, session_id, user_id)
+    
+    # Log to database
+    try:
+        from core.database import SessionLocal
+        from models.chat import ChatHistory
+        
+        db = SessionLocal()
+        db.add(ChatHistory(
+            session_id=session_id,
+            role="user",
+            language=lang,
+            message=user_text,
+            user_id=user_id,
+        ))
+        db.add(ChatHistory(
+            session_id=session_id,
+            role="assistant",
+            language=lang,
+            message=answer_text,
+            user_id=user_id,
+        ))
+        db.commit()
+        db.close()
+    except Exception:
+        pass
+    
+    return VoiceChatResponse(user_text=user_text.strip(), answer_text=answer_text)

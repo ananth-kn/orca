@@ -1,9 +1,10 @@
 import { calculateDistanceKm, calculateETA } from '../utils/geo';
-import type { PFZData, WeatherData } from './mockData';
+import type { PFZData, WeatherData } from './types';
 import type {
   Alert,
   ChatMessage,
   ChatResponse,
+  ChatStructuredData,
   Harbor,
   PFZResponse,
 } from './client';
@@ -54,6 +55,9 @@ export function mapChatResponse(raw: Record<string, unknown>): ChatResponse {
     session_id: String(raw.session_id ?? ''),
     response: String(raw.response ?? raw.reply ?? ''),
     language: raw.language != null ? String(raw.language) : undefined,
+    data: (raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data))
+      ? (raw.data as ChatStructuredData)
+      : undefined,
   };
 }
 
@@ -117,7 +121,7 @@ export function mapPfzResponse(raw: Record<string, unknown>): PFZResponse {
 
 export function advisoryToWeather(
   advisory: Record<string, unknown>,
-  fallback: WeatherData
+  fallback?: WeatherData
 ): WeatherData {
   const params = (advisory.parameters as Record<string, unknown> | undefined) ?? {};
   const sst = (params.sst as Record<string, unknown> | undefined) ?? {};
@@ -125,10 +129,10 @@ export function advisoryToWeather(
   const alerts = (params.disaster_alerts as Record<string, unknown> | undefined) ?? {};
 
   const waveHeight = Number(
-    waves.wave_height_meters ?? waves.wave_height_m ?? fallback.waveHeight
+    waves.wave_height_meters ?? waves.wave_height_m ?? fallback?.waveHeight ?? 0
   );
-  const temp = Number(sst.sst_celsius ?? sst.sst ?? fallback.temp);
-  const sstCelsius = Number(sst.sst_celsius ?? fallback.sstCelsius);
+  const temp = Number(sst.sst_celsius ?? sst.sst ?? fallback?.temp ?? 0);
+  const sstCelsius = Number(sst.sst_celsius ?? fallback?.sstCelsius ?? 0);
   const status = safetyToStatus(
     String(advisory.marine_safety_index ?? waves.sea_state ?? waves.safety_index ?? '')
   );
@@ -136,12 +140,12 @@ export function advisoryToWeather(
 
   return {
     temp,
-    windSpeed: fallback.windSpeed,
+    windSpeed: fallback?.windSpeed ?? 0,
     waveHeight,
-    rainProb: fallback.rainProb,
-    visibilityKm: fallback.visibilityKm,
+    rainProb: fallback?.rainProb ?? 0,
+    visibilityKm: fallback?.visibilityKm ?? 0,
     sstCelsius,
-    chlorophyll: fallback.chlorophyll,
+    chlorophyll: fallback?.chlorophyll ?? 0,
     status: alertLevel.toLowerCase().includes('orange') ? 'CAUTION' : status,
   };
 }

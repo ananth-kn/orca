@@ -2,19 +2,13 @@ import { create } from 'zustand';
 import api, { type Harbor } from '../api/client';
 import {
   advisoryToWeather,
-  seedToLivePfz,
 } from '../api/adapters';
-import {
-  mockCurrentWeather,
-  mock2to3HrForecast,
-  mockPFZs,
-  mockHarbors,
-  initialChatMessages,
-  type PFZData,
-  type WeatherData,
-  type HourlyForecast,
-  type ChatMessage,
-} from '../api/mockData';
+import type {
+  PFZData,
+  WeatherData,
+  HourlyForecast,
+  ChatMessage,
+} from '../api/types';
 
 export type ActiveTab = 'home' | 'map' | 'ai' | 'trip' | 'chat' | 'profile' | 'weather';
 
@@ -55,6 +49,54 @@ function sessionId(): string {
   return id;
 }
 
+const ISO_TO_FULL: Record<string, string> = {
+  en: 'English',
+  hi: 'Hindi',
+  ta: 'Tamil',
+  te: 'Telugu',
+  ml: 'Malayalam',
+  kn: 'Kannada',
+  bn: 'Bengali',
+  gu: 'Gujarati',
+  mr: 'Marathi',
+  or: 'Odia',
+};
+
+export function normalizeLanguage(lang: string | null | undefined): string {
+  const trimmed = (lang || '').trim();
+  if (!trimmed) return 'English';
+  const lower = trimmed.toLowerCase();
+  if (ISO_TO_FULL[lower]) return ISO_TO_FULL[lower];
+  const capitalized = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  if (Object.values(ISO_TO_FULL).includes(capitalized)) return capitalized;
+  return capitalized;
+}
+
+function storageGet(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem(key);
+}
+
+function storageSet(key: string, value: string): void {
+  if (typeof window !== 'undefined') window.localStorage.setItem(key, value);
+}
+
+export interface LoraMessage {
+  id: string;
+  sender: string;
+  text: string;
+  isMe: boolean;
+  distance?: string;
+  isSos?: boolean;
+  timestamp: string;
+}
+
+export interface FaqItem {
+  id: string;
+  question: string;
+  active: boolean;
+}
+
 interface AppState {
   // Navigation & Screen Tabs
   activeTab: ActiveTab;
@@ -68,13 +110,19 @@ interface AppState {
   // Language & Vessel
   language: string;
   setLanguage: (lang: string) => void;
-  location: Location;
+  location: Location | null;
   setLocation: (loc: Location) => void;
   marineContext: MarineContext;
   setMarineContext: (ctx: MarineContext) => void;
 
+  // Logged-in fisherman profile
+  name: string;
+  phone: string;
+  emergencyPhone: string;
+  setUserProfile: (profile: { name?: string; phone?: string; emergencyPhone?: string }) => void;
+
   // Weather & Sea Conditions
-  weather: WeatherData;
+  weather: WeatherData | null;
   forecast2to3Hr: HourlyForecast[];
   forecastTrend: string;
   activeAlert: MarineAlertItem | null;
@@ -105,12 +153,26 @@ interface AppState {
   orcaWatchingState: 'watching' | 'found_something';
   orcaWatchingDetails: string[];
 
+  // Fleet LoRa Chat
+  loraMessages: LoraMessage[];
+  addLoraMessage: (msg: Omit<LoraMessage, 'id' | 'timestamp'>) => void;
+  loraConnected: boolean;
+
+  // FAQs (backend-powered suggestion chips)
+  faqs: FaqItem[];
+  loadFaqs: () => Promise<void>;
+
   // Chat & AI
   chatMessages: ChatMessage[];
   isChatSending: boolean;
-  sendChat: (text: string) => Promise<void>;
+  sendChat: (text: string, context?: string) => Promise<void>;
   clearChat: () => void;
   addVoiceTurn: (userText: string, answerText: string) => void;
+
+  // Auth
+  userId: string | null;
+  setUserId: (id: string | null) => void;
+  logout: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -118,136 +180,133 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
 
   navigateToMapWithPfz: (pfzId: string) => {
-    set({
-      selectedPfz: pfzId,
-      activeTab: 'map',
-    });
+    set({ selectedPfz: pfzId, activeTab: 'map' });
   },
 
   isSOSOpen: false,
   setSOSOpen: (open) => set({ isSOSOpen: open }),
 
-  language: (() => {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem('orca_lang') : null;
-    return saved || 'English';
-  })(),
-  setLanguage: (lang) => set({ language: lang }),
-
-  location: {
-    lat: 12.8722,
-    lng: 74.8425,
-    speedKnots: 0.0,
-    headingDeg: 215,
+  language: normalizeLanguage(storageGet('orca_lang')),
+  setLanguage: (lang) => {
+    const normalized = normalizeLanguage(lang);
+    storageSet('orca_lang', normalized);
+    set({ language: normalized });
   },
+
+  name: storageGet('orca_user_name') || '',
+  phone: storageGet('orca_user_phone') || '',
+  emergencyPhone: storageGet('orca_user_emergency') || '',
+  setUserProfile: (profile) => {
+    const updates: Partial<AppState> = {};
+    if (profile.name !== undefined) {
+      storageSet('orca_user_name', profile.name);
+      updates.name = profile.name;
+    }
+    if (profile.phone !== undefined) {
+      storageSet('orca_user_phone', profile.phone);
+      updates.phone = profile.phone;
+    }
+    if (profile.emergencyPhone !== undefined) {
+      storageSet('orca_user_emergency', profile.emergencyPhone);
+      updates.emergencyPhone = profile.emergencyPhone;
+    }
+    set(updates);
+  },
+
+  location: null,
   setLocation: (loc) => set({ location: loc }),
   marineContext: 'harbour',
   setMarineContext: (ctx) => set({ marineContext: ctx }),
 
-  weather: mockCurrentWeather,
-  forecast2to3Hr: mock2to3HrForecast,
-  forecastTrend: 'Waves and wind increasing after +1 hour. Return advised before 4:30 PM.',
-
-  activeAlert: {
-    id: 'alert-1',
-    type: 'CAUTION',
-    title: 'Wind increasing',
-    subtitle: '14 → 24 km/h expected in ~2 hours',
-    description: 'IMD Coastal bulletin indicates moderate squall line forming 18 nautical miles offshore.',
-    recommendation: 'Begin your return to harbour before 4:30 PM.',
-    timeframe: 'In about 2 hours',
-    active: true,
-  },
-
-  sinceLastCheck: [
-    { metric: 'Waves', from: '0.6 m', to: '0.8 m', hasChanged: true },
-    { metric: 'Wind', from: '10 km/h', to: '14 km/h', hasChanged: true },
-    { metric: 'Rain', from: '10%', to: '20%', hasChanged: true },
-  ],
+  weather: null,
+  forecast2to3Hr: [],
+  forecastTrend: '',
+  activeAlert: null,
+  sinceLastCheck: [],
 
   isRefreshing: false,
-  lastRefreshedMinutesAgo: 4,
-  lastRefreshedLabel: 'LIVE · 4 min ago',
-  dataFreshness: {
-    weatherMins: 4,
-    oceanMins: 18,
-    satelliteMins: 42,
-  },
+  lastRefreshedMinutesAgo: 0,
+  lastRefreshedLabel: '',
+  dataFreshness: { weatherMins: 0, oceanMins: 0, satelliteMins: 0 },
+
   isOffline: false,
   setOffline: (offline) => set({ isOffline: offline }),
 
-  pfzs: mockPFZs,
-  harbors: mockHarbors,
-  selectedPfz: 'pfz-1',
+  pfzs: [],
+  harbors: [],
+  selectedPfz: null,
   setSelectedPfz: (id) => set({ selectedPfz: id }),
   disclosurePfzId: null,
   setDisclosurePfzId: (id) => set({ disclosurePfzId: id }),
 
   orcaWatchingState: 'watching',
-  orcaWatchingDetails: ['Weather', 'Waves', 'Hazards', 'Boundaries'],
+  orcaWatchingDetails: [],
+
+  // LoRa fleet chat
+  loraMessages: [],
+  addLoraMessage: (msg) => {
+    const newMsg: LoraMessage = {
+      ...msg,
+      id: `lora-${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    set((state) => ({ loraMessages: [...state.loraMessages, newMsg] }));
+  },
+  loraConnected: false,
+
+  // FAQs
+  faqs: [],
+  loadFaqs: async () => {
+    try {
+      const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+      const res = await fetch(`${BASE}/api/chat/faqs`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        set({ faqs: data.map((f: any) => ({ id: String(f.id), question: f.question || f.text || '', active: f.active ?? true })) });
+      }
+    } catch { /* silent */ }
+  },
 
   refreshMarine: async () => {
     const { location, isOffline } = get();
     set({ isRefreshing: true });
 
     if (isOffline) {
-      setTimeout(() => {
-        set({
-          isRefreshing: false,
-          lastRefreshedMinutesAgo: 0,
-          lastRefreshedLabel: 'OFFLINE · Cached',
-        });
-      }, 400);
+      setTimeout(() => set({ isRefreshing: false, lastRefreshedMinutesAgo: 0, lastRefreshedLabel: 'OFFLINE · No cached data' }), 400);
+      return;
+    }
+    if (!location) {
+      set({ isRefreshing: false, lastRefreshedLabel: '' });
       return;
     }
 
     try {
-      const [advisory, pfzRows, harbors] = await Promise.all([
+      const [advisory, harbors] = await Promise.all([
         api.marine.fullAdvisory(location.lat, location.lng).catch(() => null),
-        Promise.all(
-          mockPFZs.map((seed) =>
-            api.marine
-              .pfz(seed.lat, seed.lng)
-              .then((raw) => seedToLivePfz(seed, raw, location))
-              .catch(() => seed)
-          )
-        ),
-        api.advisory.harbors().catch(() => get().harbors),
+        api.advisory.harbors().catch(() => []),
       ]);
 
-      if (advisory) {
-        set({
-          weather: advisoryToWeather(advisory, mockCurrentWeather),
-        });
-      }
+      if (advisory) set({ weather: advisoryToWeather(advisory) });
 
       set({
-        pfzs: pfzRows.length ? pfzRows : mockPFZs,
-        harbors: harbors.length ? harbors : mockHarbors,
+        harbors,
         isRefreshing: false,
-        lastRefreshedMinutesAgo: 0,
         lastRefreshedLabel: 'LIVE · Just now',
-        dataFreshness: {
-          weatherMins: 1,
-          oceanMins: 5,
-          satelliteMins: 12,
-        },
+        dataFreshness: { weatherMins: 1, oceanMins: 1, satelliteMins: 1 },
       });
     } catch {
-      set({
-        isRefreshing: false,
-        lastRefreshedMinutesAgo: 0,
-        lastRefreshedLabel: 'LIVE · Just now',
-      });
+      set({ isRefreshing: false, lastRefreshedLabel: '' });
     }
   },
 
-  chatMessages: initialChatMessages,
+  chatMessages: [],
   isChatSending: false,
-  sendChat: async (text: string) => {
+  sendChat: async (text: string, context?: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
     const userId = typeof window !== 'undefined' ? localStorage.getItem('orca_user_id') : null;
-    const { location, language, chatMessages } = get();
+    const { language, chatMessages } = get();
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
@@ -255,31 +314,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    set({
-      isChatSending: true,
-      chatMessages: [...chatMessages, userMsg],
-    });
+    set({ isChatSending: true, chatMessages: [...chatMessages, userMsg] });
 
     try {
       const res = await api.chat.message(
-        sessionId(),
-        trimmed,
-        location.lat,
-        location.lng,
-        language,
-        userId ? parseInt(userId) : undefined
+        sessionId(), trimmed, undefined, undefined, language,
+        userId ? parseInt(userId) : undefined,
+        context
       );
-
+      const reply = res.response?.trim() || '';
       set({
         isChatSending: false,
         chatMessages: [
           ...get().chatMessages,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            text: res.response || 'Conditions are favourable. Waves 0.8m, wind 14 km/h. High potential in Sector 4A.',
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          },
+          { id: `a-${Date.now()}`, role: 'assistant', text: reply, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
         ],
       });
     } catch {
@@ -287,18 +335,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         isChatSending: false,
         chatMessages: [
           ...get().chatMessages,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            text: 'Weather is favourable now (Waves 0.8m). Wind increasing after +1 hour. Nearest high catch area is Sector 4A (4.8 km SW).',
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          },
+          { id: `a-${Date.now()}`, role: 'assistant', text: '', time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
         ],
       });
     }
   },
 
-  clearChat: () => set({ chatMessages: initialChatMessages }),
+  clearChat: () => set({ chatMessages: [] }),
 
   addVoiceTurn: (userText: string, answerText: string) =>
     set((state) => ({
@@ -308,4 +351,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         { id: `a-${Date.now() + 1}`, role: 'assistant', text: answerText, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
       ],
     })),
+
+  userId: storageGet('orca_user_id'),
+  setUserId: (id) => {
+    if (id) storageSet('orca_user_id', id);
+    else window.localStorage.removeItem('orca_user_id');
+    set({ userId: id });
+  },
+  logout: () => {
+    ['orca_user_id', 'orca_lang', 'orca_user_name', 'orca_user_phone', 'orca_user_emergency',
+     'orca_emer_name', 'orca_emer_relation'].forEach((k) => window.localStorage.removeItem(k));
+    set({ userId: null, activeTab: 'home' as ActiveTab });
+    window.dispatchEvent(new CustomEvent('orca:login-ok'));
+  },
 }));

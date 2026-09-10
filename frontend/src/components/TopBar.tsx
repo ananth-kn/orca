@@ -1,9 +1,10 @@
 import React from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { RefreshCw, User, AlertTriangle } from 'lucide-react';
+import { t } from '../utils/translations';
 
 export const TopBar: React.FC = () => {
-  const { isRefreshing, lastRefreshedLabel, isOffline, refreshMarine, setActiveTab, setSOSOpen } = useAppStore();
+  const { isRefreshing, lastRefreshedLabel, isOffline, refreshMarine, setActiveTab, setSOSOpen, language } = useAppStore();
 
   return (
     <header className="fixed top-0 left-0 right-0 h-14 bg-white border-b border-slate-200 z-40 px-3.5 sm:px-6 flex items-center justify-between shadow-2xs select-none">
@@ -12,7 +13,7 @@ export const TopBar: React.FC = () => {
       <div className="flex items-center space-x-2.5">
         <button
           onClick={() => void refreshMarine()}
-          title="Tap to refresh marine data"
+          title={t('topbar_refresh', language)}
           className="flex items-center space-x-1.5 active:opacity-75 transition group"
         >
           <div className="w-7 h-7 rounded-lg bg-slate-900 text-white flex items-center justify-center font-black text-xs group-hover:bg-blue-600 transition">
@@ -33,16 +34,16 @@ export const TopBar: React.FC = () => {
             </div>
             
             <div className="text-[10px] text-slate-500 font-medium leading-none mt-0.5">
-              {isRefreshing ? 'SYNCING' : isOffline ? 'OFFLINE' : lastRefreshedLabel}
+              {isRefreshing ? t('syncing', language) : isOffline ? t('common_offline', language) : lastRefreshedLabel}
             </div>
           </div>
         </button>
 
         <span className="text-slate-300">|</span>
 
-        {/* REGION LABEL */}
+        {/* REGION LABEL — no hardcoded region until live data exists */}
         <span className="text-xs font-bold text-slate-700">
-          Mangaluru Coast
+          {t('topbar_coastline', language)}
         </span>
       </div>
 
@@ -53,12 +54,12 @@ export const TopBar: React.FC = () => {
           className="bg-red-600 hover:bg-red-700 active:scale-95 text-white px-2.5 py-1 rounded-md text-xs font-black tracking-wider uppercase shadow-2xs flex items-center space-x-1"
         >
           <AlertTriangle size={13} />
-          <span>SOS</span>
+          <span>{t('sos_button', language)}</span>
         </button>
 
         <button
           onClick={() => setActiveTab('profile')}
-          title="Profile & Settings"
+          title={t('topbar_profile_settings', language)}
           className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 border border-slate-200 flex items-center justify-center text-slate-700 transition active:scale-95"
         >
           <User size={14} />

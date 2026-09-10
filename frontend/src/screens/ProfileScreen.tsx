@@ -2,196 +2,317 @@ import React, { useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import {
   Globe,
-  Ship,
-  Phone,
-  Radio,
-  HardDrive,
-  Check,
-  WifiOff,
+  User,
   Wifi,
+  WifiOff,
+  Bell,
+  LogOut,
+  Info,
+  Phone,
+  ChevronDown,
+  LifeBuoy,
 } from 'lucide-react';
 import { SUPPORTED_LANGUAGES } from '../utils/translations';
+import {
+  SOS_CONTACTS,
+  readSosContact,
+  writeSosContact,
+  type SosContact,
+} from '../utils/sos';
+
+function readStored(key: string, fallback = ''): string {
+  if (typeof window === 'undefined') return fallback;
+  return window.localStorage.getItem(key) || fallback;
+}
+function writeStored(key: string, value: string) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(key, value);
+}
+
+function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      className={`relative shrink-0 rounded-full transition-colors ${on ? 'bg-emerald-500' : 'bg-white/15'}`}
+      style={{ width: 44, height: 24 }}
+    >
+      <span
+        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-[20px]' : 'left-0.5'}`}
+      />
+    </button>
+  );
+}
 
 export const ProfileScreen: React.FC = () => {
-  const { language, setLanguage, isOffline, setOffline, refreshMarine } = useAppStore();
-  const [cachePreloaded, setCachePreloaded] = useState(false);
-  const [boatName, setBoatName] = useState('Matsya Sagar IND-KA-04');
-  const [regNo, setRegNo] = useState('IND-KA-04-MM-8921');
+  const { language, setLanguage, isOffline, setOffline } = useAppStore();
 
-  const handlePrecache = () => {
-    setCachePreloaded(true);
-    void refreshMarine();
+  // Profile fields
+  const [name, setName] = useState(() => readStored('orca_name', 'Fishing Crew'));
+  const [email, setEmail] = useState(() => readStored('orca_email', ''));
+  const [phone, setPhone] = useState(() => readStored('orca_phone', ''));
+  const [saved, setSaved] = useState(false);
+
+  // SOS emergency number
+  const [sosContact, setSosContact] = useState<SosContact>(() => readSosContact());
+
+  // Emergency contact
+  const [emergencyName, setEmergencyName] = useState(() => readStored('orca_emer_name', ''));
+  const [emergencyRelation, setEmergencyRelation] = useState(() => readStored('orca_emer_relation', ''));
+  const [emergencyPhone, setEmergencyPhone] = useState(() => readStored('orca_emer_phone', ''));
+
+  // Toggles
+  const [sosAlert, setSosAlert] = useState(() => readStored('orca_sos_alert', '1') === '1');
+  const [notifications, setNotifications] = useState(true);
+
+  const handleSaveProfile = () => {
+    writeStored('orca_name', name);
+    writeStored('orca_email', email);
+    writeStored('orca_phone', phone);
+    writeStored('orca_emer_name', emergencyName);
+    writeStored('orca_emer_relation', emergencyRelation);
+    writeStored('orca_emer_phone', emergencyPhone);
+    writeStored('orca_sos_alert', sosAlert ? '1' : '0');
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1800);
   };
 
-  return (
-    <div className="min-h-full pb-24 pt-18 px-4 sm:px-6 max-w-xl mx-auto space-y-4 text-slate-900 select-none bg-[#F8FAFC]">
-      
-      {/* 1. LANGUAGE SELECTOR (SOLID LIGHT BUTTONS) */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5 shadow-xs">
-        <div className="flex items-center space-x-2">
-          <Globe size={18} className="text-blue-600" />
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">Select Language / भाषा चुनें</h2>
-            <p className="text-[11px] text-slate-500">App interface and voice responses adapt instantly</p>
-          </div>
-        </div>
+  const handleSignOut = () => {
+    ['orca_user_id', 'orca_lang', 'orca_name', 'orca_email', 'orca_phone',
+     'orca_emer_name', 'orca_emer_relation', 'orca_emer_phone'].forEach((k) =>
+      window.localStorage.removeItem(k)
+    );
+    window.dispatchEvent(new CustomEvent('orca:login-ok'));
+  };
 
-        {/* Language Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
-          {SUPPORTED_LANGUAGES.map((l) => {
-            const isSelected = language === l.code;
-            return (
-              <button
-                key={l.code}
-                onClick={() => setLanguage(l.code)}
-                className={`p-2.5 rounded-xl border flex items-center justify-between text-left transition active:scale-95 ${
-                  isSelected
-                    ? 'bg-blue-600 border-blue-700 text-white font-bold shadow-xs'
-                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <div>
-                  <div className="text-xs font-bold">{l.nativeLabel}</div>
-                  <div className="text-[10px] opacity-80">{l.label}</div>
-                </div>
-                {isSelected && <Check size={14} strokeWidth={3} className="text-white" />}
-              </button>
-            );
-          })}
+  const inputCls =
+    'w-full bg-white/[0.05] border border-white/10 rounded-xl px-3.5 py-2.5 text-white text-sm placeholder-white/30 outline-none focus:border-sky-400/60 focus:bg-white/[0.07]';
+
+  const cardCls = 'bg-white/[0.04] border border-white/[0.08] rounded-2xl overflow-hidden';
+  const sectionTitleCls = 'flex items-center gap-2.5 px-4 pt-4 pb-1';
+  const sectionBodyCls = 'px-4 pb-4 space-y-3';
+
+  return (
+    <div className="min-h-full pb-24 px-4 sm:px-6 max-w-xl mx-auto bg-[#0f1535] text-white select-none">
+
+      {/* ── Profile Header ────────────────────────────── */}
+      <div className="flex items-center gap-4 px-1 pt-6 pb-5">
+        <div className="w-14 h-14 rounded-full bg-[#1565C0] flex items-center justify-center text-xl font-bold shrink-0">
+          {name.trim().charAt(0).toUpperCase() || 'U'}
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-lg font-bold truncate">{name}</h1>
+          <p className="text-xs text-white/45 truncate">
+            {email || 'No email added'}
+            {phone ? ` · ${phone}` : ''}
+          </p>
         </div>
       </div>
 
-      {/* 2. VESSEL REGISTRATION DETAILS */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5 shadow-xs">
-        <div className="flex items-center space-x-2">
-          <Ship size={18} className="text-blue-600" />
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">Boat & Vessel Profile</h2>
-            <p className="text-[11px] text-slate-500">Registered details used for Coast Guard emergency identification</p>
-          </div>
+      {/* ── Edit Profile ──────────────────────────────── */}
+      <div className={`${cardCls} mb-3`}>
+        <div className={sectionTitleCls}>
+          <User size={16} className="text-white/50" />
+          <h2 className="text-sm font-bold">Edit Profile</h2>
         </div>
-
-        <div className="space-y-2.5 pt-1">
+        <div className={sectionBodyCls}>
           <div>
-            <label className="text-[11px] font-bold text-slate-600 block mb-1">Boat Name</label>
+            <label className="text-[11px] font-semibold text-white/50 block mb-1">Full Name</label>
             <input
               type="text"
-              value={boatName}
-              onChange={(e) => setBoatName(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-xs px-3 py-2 rounded-xl font-bold outline-none focus:border-blue-600"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter your name"
+              className={inputCls}
             />
           </div>
+          <div>
+            <label className="text-[11px] font-semibold text-white/50 block mb-1">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className={inputCls}
+            />
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-white/50 block mb-1">Phone</label>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+91 00000 00000"
+              className={inputCls}
+            />
+          </div>
+          <button
+            onClick={handleSaveProfile}
+            className="w-full bg-[#1565C0] hover:bg-[#1976D2] text-white font-semibold text-sm py-2.5 rounded-xl active:scale-[0.98] transition-transform"
+          >
+            {saved ? 'Saved' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
 
+      {/* ── SOS & Emergency ───────────────────────────── */}
+      <div className={`${cardCls} mb-3`}>
+        <div className={sectionTitleCls}>
+          <LifeBuoy size={16} className="text-red-400/70" />
+          <h2 className="text-sm font-bold">SOS & Emergency</h2>
+        </div>
+        <div className={sectionBodyCls}>
+
+          {/* SOS Number selector (dropdown) */}
+          <div>
+            <label className="text-[11px] font-semibold text-white/50 block mb-1">SOS Number</label>
+            <div className="relative">
+              <select
+                value={sosContact.id}
+                onChange={(e) => {
+                  const chosen = SOS_CONTACTS.find((c) => c.id === e.target.value);
+                  if (chosen) {
+                    setSosContact(chosen);
+                    writeSosContact(chosen.id);
+                  }
+                }}
+                className="w-full appearance-none bg-white/[0.05] border border-white/10 rounded-xl pl-3.5 pr-10 py-2.5 text-white text-sm outline-none transition-colors focus:border-sky-400/60 focus:bg-white/[0.07] cursor-pointer"
+              >
+                {SOS_CONTACTS.map((c) => (
+                  <option key={c.id} value={c.id} className="bg-[#0f1535] text-white">
+                    {c.label} — {c.number}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={16} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-white/40" />
+            </div>
+            {sosContact.description && (
+              <p className="text-[11px] text-white/40 mt-1">{sosContact.description}</p>
+            )}
+          </div>
+
+          {/* Quick-call button */}
+          <a
+            href={`tel:${sosContact.number}`}
+            className="w-full bg-red-600/80 hover:bg-red-600 active:scale-[0.98] transition-all rounded-xl py-3 flex items-center justify-center gap-2 text-white font-bold text-sm border border-red-500/20"
+          >
+            <Phone size={16} />
+            Call {sosContact.label}
+          </a>
+
+          {/* Divider */}
+          <div className="border-t border-white/[0.06]" />
+
+          {/* Emergency Contact fields */}
+          <div>
+            <label className="text-[11px] font-semibold text-white/50 block mb-1">Emergency Contact Name</label>
+            <input
+              type="text"
+              value={emergencyName}
+              onChange={(e) => setEmergencyName(e.target.value)}
+              placeholder="Contact name"
+              className={inputCls}
+            />
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-[11px] font-bold text-slate-600 block mb-1">Registration No.</label>
+              <label className="text-[11px] font-semibold text-white/50 block mb-1">Relation</label>
               <input
                 type="text"
-                value={regNo}
-                onChange={(e) => setRegNo(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-xs px-3 py-2 rounded-xl font-mono outline-none focus:border-blue-600"
+                value={emergencyRelation}
+                onChange={(e) => setEmergencyRelation(e.target.value)}
+                placeholder="Father / Spouse"
+                className={inputCls}
               />
             </div>
             <div>
-              <label className="text-[11px] font-bold text-slate-600 block mb-1">Home Port</label>
-              <div className="w-full bg-slate-100 border border-slate-200 text-slate-800 text-xs px-3 py-2 rounded-xl font-bold">
-                Mangaluru Old Port
-              </div>
+              <label className="text-[11px] font-semibold text-white/50 block mb-1">Phone</label>
+              <input
+                type="tel"
+                value={emergencyPhone}
+                onChange={(e) => setEmergencyPhone(e.target.value)}
+                placeholder="+91 00000 00000"
+                className={inputCls}
+              />
             </div>
+          </div>
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-sm text-white/70">Alert this contact on SOS</span>
+            <Toggle on={sosAlert} onClick={() => setSosAlert((v) => !v)} />
           </div>
         </div>
       </div>
 
-      {/* 3. EMERGENCY CONTACTS & HELPLINES */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5 shadow-xs">
-        <div className="flex items-center space-x-2">
-          <Phone size={18} className="text-red-600" />
-          <div>
-            <h2 className="text-sm font-bold text-slate-900">Emergency Helplines & Coast Guard</h2>
-            <p className="text-[11px] text-slate-500">National Search & Rescue (MRCC)</p>
-          </div>
-        </div>
-
-        <div className="space-y-2 pt-1">
-          <a
-            href="tel:1554"
-            className="w-full bg-red-600 hover:bg-red-700 text-white p-3 rounded-xl flex items-center justify-between transition active:scale-95 shadow-xs"
-          >
-            <div className="flex items-center space-x-2.5">
-              <Phone size={18} />
-              <div>
-                <div className="font-extrabold text-xs">Indian Coast Guard Helpline</div>
-                <div className="text-[10px] text-red-100">National Toll-Free SAR</div>
-              </div>
-            </div>
-            <span className="font-mono text-lg font-black">1554</span>
-          </a>
-
-          <a
-            href="tel:1093"
-            className="w-full bg-slate-50 hover:bg-slate-100 border border-slate-200 p-2.5 rounded-xl flex items-center justify-between transition active:scale-95"
-          >
-            <div className="flex items-center space-x-2.5">
-              <Phone size={16} className="text-blue-600" />
-              <div>
-                <div className="font-bold text-xs text-slate-900">Coastal Marine Police</div>
-                <div className="text-[10px] text-slate-500">Local Control Room</div>
-              </div>
-            </div>
-            <span className="font-mono text-sm font-bold text-slate-900">1093</span>
-          </a>
-
-          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
-            <span className="text-slate-600 font-bold flex items-center">
-              <Radio size={14} className="mr-1.5 text-blue-600" /> Emergency VHF Frequency
-            </span>
-            <span className="font-mono font-bold text-slate-900">Channel 16 (156.8 MHz)</span>
-          </div>
-        </div>
-      </div>
-
-      {/* 4. OFFLINE STORAGE & PRE-CACHE */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5 shadow-xs">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <HardDrive size={18} className="text-blue-600" />
+      {/* ── Preferences (Offline + Notifications) ────── */}
+      <div className={`${cardCls} mb-3`}>
+        <div className="flex items-center justify-between px-4 py-3.5">
+          <div className="flex items-center gap-2.5">
+            {isOffline ? <WifiOff size={16} className="text-amber-400" /> : <Wifi size={16} className="text-emerald-400" />}
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Offshore Offline Mode</h2>
-              <p className="text-[11px] text-slate-500">Save maps & PFZ data for offshore use beyond cellular towers</p>
+              <div className="text-sm font-bold">Offline Mode</div>
+              <div className="text-[11px] text-white/40">Use cached data beyond cellular range</div>
             </div>
           </div>
-
-          <button
-            onClick={() => setOffline(!isOffline)}
-            className={`px-3 py-1 rounded-xl font-bold text-xs transition flex items-center space-x-1 ${
-              isOffline
-                ? 'bg-amber-600 text-white'
-                : 'bg-emerald-600 text-white'
-            }`}
-          >
-            {isOffline ? <WifiOff size={13} /> : <Wifi size={13} />}
-            <span>{isOffline ? 'Offline' : 'Online'}</span>
-          </button>
+          <Toggle on={isOffline} onClick={() => setOffline(!isOffline)} />
         </div>
-
-        <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between">
-          <div className="text-xs text-slate-500">
-            {cachePreloaded ? 'All 12 Harbors & Maps Cached locally' : 'Status: Ready'}
+        <div className="border-t border-white/[0.06]" />
+        <div className="flex items-center justify-between px-4 py-3.5">
+          <div className="flex items-center gap-2.5">
+            <Bell size={16} className="text-white/50" />
+            <span className="text-sm font-bold">Marine Notifications</span>
           </div>
-          <button
-            onClick={handlePrecache}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3 py-1.5 rounded-xl transition shadow-xs"
-          >
-            {cachePreloaded ? 'Refreshed' : 'Pre-cache Coastal Maps'}
-          </button>
+          <Toggle on={notifications} onClick={() => setNotifications((v) => !v)} />
         </div>
       </div>
 
-      {/* FOOTER */}
-      <div className="text-center text-xs text-slate-400 pt-1 pb-4">
-        ORCA Marine • Smart India Hackathon ISRO 26176
+      {/* ── Language ──────────────────────────────────── */}
+      <div className={`${cardCls} mb-3`}>
+        <div className={sectionTitleCls}>
+          <Globe size={16} className="text-white/50" />
+          <h2 className="text-sm font-bold">Language</h2>
+        </div>
+        <div className={`${sectionBodyCls} pt-2`}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {SUPPORTED_LANGUAGES.map((l) => {
+              const isSelected = language === l.code;
+              return (
+                <button
+                  key={l.code}
+                  onClick={() => setLanguage(l.code)}
+                  className={`px-3 py-2 rounded-xl border text-left text-xs font-semibold ${
+                    isSelected
+                      ? 'bg-[#1565C0] border-[#1565C0] text-white'
+                      : 'bg-white/[0.04] border-white/10 text-white/70 hover:bg-white/[0.08]'
+                  }`}
+                >
+                  {l.nativeLabel}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
+      {/* ── About ─────────────────────────────────────── */}
+      <div className={`${cardCls} mb-3`}>
+        <div className="flex items-center gap-2.5 px-4 py-3.5">
+          <Info size={16} className="text-white/50" />
+          <div>
+            <div className="text-sm font-bold">ORCA Marine</div>
+            <div className="text-[11px] text-white/40">Smart India Hackathon ISRO 26176</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Sign out ──────────────────────────────────── */}
+      <button
+        onClick={handleSignOut}
+        className="w-full bg-red-500/10 hover:bg-red-500/20 border border-red-400/30 rounded-2xl py-3 flex items-center justify-center gap-2 text-red-300 font-semibold text-sm mb-4 active:scale-[0.98] transition-transform"
+      >
+        <LogOut size={16} />
+        Sign Out
+      </button>
     </div>
   );
 };

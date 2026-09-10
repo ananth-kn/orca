@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     # AI Models
     SARVAM_API_KEY: str = ""
     KAGGLE_STT_TTS_URL: str = "https://unsilent-sherlene-jurisdictionally.ngrok-free.dev"
-    LLM_PROVIDER: str = "groq"  # "sarvam" or "groq"
+    LLM_PROVIDER: str = "sarvam"  # "sarvam" or "groq"
+    SARVAM_MODEL: str = "sarvam-105b"
+    SARVAM_CONVERSATION_MODEL: str = "sarvam-105b-conversations"
     GROQ_API_KEY: str = ""
     AI4BHARAT_STT_URL: str = ""
     AI4BHARAT_TTS_URL: str = ""

@@ -49,7 +49,6 @@ export interface HourlyForecast {
   rainProb: number;
   status: 'FAVOURABLE' | 'CAUTION' | 'HIGH RISK';
   statusLabel: string;
-  icon: string;
 }
 
 export const mock2to3HrForecast: HourlyForecast[] = [
@@ -62,7 +61,6 @@ export const mock2to3HrForecast: HourlyForecast[] = [
     rainProb: 15,
     status: 'FAVOURABLE',
     statusLabel: 'Safe & Calm',
-    icon: '☀️',
   },
   {
     hourLabel: '+1 HOUR',
@@ -73,7 +71,6 @@ export const mock2to3HrForecast: HourlyForecast[] = [
     rainProb: 20,
     status: 'FAVOURABLE',
     statusLabel: 'Good Sailing',
-    icon: '🌤️',
   },
   {
     hourLabel: '+2 HOURS',
@@ -84,7 +81,6 @@ export const mock2to3HrForecast: HourlyForecast[] = [
     rainProb: 45,
     status: 'CAUTION',
     statusLabel: 'Wind Picking Up',
-    icon: '🌦️',
   },
   {
     hourLabel: '+3 HOURS',
@@ -95,7 +91,6 @@ export const mock2to3HrForecast: HourlyForecast[] = [
     rainProb: 75,
     status: 'HIGH RISK',
     statusLabel: 'Rough Sea / Rain Squall',
-    icon: '⛈️',
   },
 ];
 
@@ -174,6 +169,8 @@ export interface ChatMessage {
   text?: string;
   content?: string;
   time: string;
+  /** Structured data from the backend planner pipeline (tool results, advisories) */
+  data?: Record<string, unknown>;
 }
 
 export const initialChatMessages: ChatMessage[] = [

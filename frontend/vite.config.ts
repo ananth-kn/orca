@@ -79,6 +79,8 @@ export default defineConfig({
     })
   ],
   server: {
+    port: 5174,
+    strictPort: true,
     // In dev: proxy /api/* to the local backend (or VITE_BACKEND_URL if set)
     proxy: {
       '/api': {
