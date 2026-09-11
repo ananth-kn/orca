@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException, status, Response, APIRouter
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import Optional
 
 from core.database import get_db
-from models.user import User
+from models import User
+from schemas import UserRegister, UserLogin, UserResponse, UserUpdate, PhoneUpdate, EmergencyPhoneUpdate, LanguageUpdate, SettingsUpdate
+
+from app.core.utils import hash, verify
+from app.core.oauth2 import create_access_token
 
 router = APIRouter(
     prefix="/api/user",
@@ -12,54 +14,6 @@ router = APIRouter(
 )
 
 
-# -------------------------
-# Request schemas
-# -------------------------
-
-class UserCreate(BaseModel):
-    name: str
-    phone_number: Optional[str] = None
-    emergency_phone_number: Optional[str] = None
-    language: Optional[str] = "en"
-    settings_json: Optional[str] = "{}"
-
-
-class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    phone_number: Optional[str] = None
-    emergency_phone_number: Optional[str] = None
-    language: Optional[str] = None
-    settings_json: Optional[str] = None
-
-
-class PhoneUpdate(BaseModel):
-    phone_number: Optional[str] = None
-
-
-class EmergencyPhoneUpdate(BaseModel):
-    emergency_phone_number: Optional[str] = None
-
-
-class LanguageUpdate(BaseModel):
-    language: str
-
-
-class SettingsUpdate(BaseModel):
-    settings_json: str
-
-
-# -------------------------
-# Response schema
-# -------------------------
-
-class UserResponse(BaseModel):
-    id: int
-    name: str
-    phone_number: Optional[str]
-    emergency_phone_number: Optional[str]
-    language: str
-    settings_json: str
-    created_at: Optional[str]
 
 
 def user_to_response(user: User):
@@ -73,45 +27,53 @@ def user_to_response(user: User):
         created_at=str(user.created_at) if user.created_at else None,
     )
 
-@router.post("/login", response_model=UserResponse)
-def user_login(
-    req: UserCreate,
+@router.post("/register", response_model=UserResponse)
+def user_register(
+    req: UserRegister,
+    response: Response,
     db: Session = Depends(get_db)
 ):
-    user = None
-    if req.phone_number:
-        user = (
-            db.query(User)
-            .filter(User.phone_number == req.phone_number)
-            .first()
-        )
-    if not user:
-        user = User(
-            name=req.name,
-            phone_number=req.phone_number,
-            emergency_phone_number=req.emergency_phone_number,
-            language=req.language or "en",
-            settings_json=req.settings_json or "{}",
+    # Check if username already exists
+    existing_user = (
+        db.query(User)
+        .filter(User.name == req.name)
+        .first()
+    )
+
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An account with this name already exists"
         )
 
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    # Create user
+    user = User(
+        name=req.name,
+        password_hash=hash(req.password),
+        language=req.language or "en",
+        phone_number=None,
+        emergency_phone_number=None,
+        settings_json="{}",
+    )
 
-    else:
-        user.name = req.name
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
-        if req.emergency_phone_number is not None:
-            user.emergency_phone_number = req.emergency_phone_number
+    # Create JWT
+    access_token = create_access_token({
+        "user_id": user.id
+    })
 
-        if req.language:
-            user.language = req.language
-
-        if req.settings_json:
-            user.settings_json = req.settings_json
-
-        db.commit()
-        db.refresh(user)
+    # Store JWT in cookie
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=False,       # True in production with HTTPS
+        samesite="lax",
+        max_age=60 * 60
+    )
 
     return user_to_response(user)
 
@@ -133,6 +95,62 @@ def get_user(
         )
 
     return user_to_response(user)
+
+@router.post("/login", response_model=UserResponse)
+def user_login(
+    req: UserLogin,
+    response: Response,
+    db: Session = Depends(get_db)
+):
+    # Find user
+    user = (
+        db.query(User)
+        .filter(User.name == req.name)
+        .first()
+    )
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid name or password",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    # Verify password
+    if not verify(req.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid name or password",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    # Create JWT
+    access_token = create_access_token({
+        "user_id": user.id
+    })
+
+    # Store JWT in cookie
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=False,       # True in production with HTTPS
+        samesite="lax",
+        max_age=60 * 60
+    )
+
+    return user_to_response(user)
+
+@router.post("/logout")
+def user_logout(response: Response):
+    response.delete_cookie(
+        key="access_token",
+        httponly=True,
+        secure=False,
+        samesite="lax",
+    )
+
+    return {"message": "Logged out successfully"}
 
 @router.put("/{user_id}", response_model=UserResponse)
 def update_user(

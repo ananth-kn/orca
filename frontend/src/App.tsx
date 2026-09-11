@@ -8,8 +8,10 @@ import { ChatScreen } from './screens/ChatScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { WeatherScreen } from './screens/WeatherScreen';
 import { SOSModal } from './components/SOSModal';
+import { useLocation } from './hooks/useLocation';
 
 export function App() {
+  useLocation();
   const { activeTab, userId } = useAppStore();
   if (!userId) return <LoginScreen />;
 

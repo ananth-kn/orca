@@ -12,7 +12,7 @@ async def call_groq(
     if not api_key:
         raise ValueError("GROQ_API_KEY not configured")
     payload = {
-        "model": settings.GROQ_MODEL or "openai/gpt-oss-120b",
+        "model": "openai/gpt-oss-120b",
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,

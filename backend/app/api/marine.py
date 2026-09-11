@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import xarray as xr
 import copernicusmarine
-
+from core.config import settings
 from core.database import get_db
 from models.advisory import AdvisoryCache
 from services.marine_data import MarineDataService
@@ -63,7 +63,7 @@ async def get_sst(lat: float, lon: float):
 DATASET_ID = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
 
 
-def _fetch_chlorophyll_sync(lat: float, lon: float):
+async def _fetch_chlorophyll_sync(lat: float, lon: float):
     end_date = datetime.utcnow()
     start_date = end_date - timedelta(days=7)
 
@@ -72,7 +72,8 @@ def _fetch_chlorophyll_sync(lat: float, lon: float):
     # Search around the requested location
     radius = 0.25  # ~25 km
 
-    copernicusmarine.subset(
+    await asyncio.to_thread(
+        copernicusmarine.subset,
         dataset_id=DATASET_ID,
         variables=["CHL"],
         minimum_longitude=lon - radius,
@@ -87,7 +88,7 @@ def _fetch_chlorophyll_sync(lat: float, lon: float):
         disable_progress_bar=True,
     )
 
-    ds = xr.open_dataset(output_file)
+    ds = await asyncio.to_thread(xr.open_dataset(output_file))
 
     chl = ds["CHL"]
 
@@ -173,7 +174,7 @@ def _fetch_chlorophyll_sync(lat: float, lon: float):
 
 async def get_chlorophyll(lat: float, lon: float):
     try:
-        value, data_time = await asyncio.to_thread(_fetch_chlorophyll_sync, lat, lon)
+        value, data_time = await _fetch_chlorophyll_sync, lat, lon
     except Exception as e:
         return _empty_result(lat, lon, "Request failed")
 
@@ -205,13 +206,13 @@ async def chlorophyll(lat: float = Query(...), lon: float = Query(...)):
 WAVE_DATASET_ID = "cmems_mod_glo_wav_anfc_0.083deg_PT3H-i"
 
 
-def _fetch_waves_sync(lat: float, lon: float):
+async def _fetch_waves_sync(lat: float, lon: float):
     now = datetime.utcnow()
     output_file = f"/tmp/waves_{lat}_{lon}.nc"
 
     radius = 0.25  # ~25 km search radius
 
-    copernicusmarine.subset(
+    await asyncio.to_thread(copernicusmarine.subset(
         dataset_id=WAVE_DATASET_ID,
         variables=["VHM0", "VMDR", "VTPK"],
         minimum_longitude=lon - radius,
@@ -225,8 +226,8 @@ def _fetch_waves_sync(lat: float, lon: float):
         overwrite=True,
         disable_progress_bar=True,
     )
-
-    ds = xr.open_dataset(output_file)
+    )
+    ds = await asyncio.to_thread(xr.open_dataset(output_file))
 
     # Latest available time
     latest = ds.isel(time=-1)
@@ -333,7 +334,7 @@ async def get_waves_and_sea_state(
     Source: Copernicus Marine Global Wave Forecast (MFWAM model).
     """
     try:
-        data = await asyncio.to_thread(_fetch_waves_sync, lat, lon)
+        data = await _fetch_waves_sync, lat, lon
     except Exception as e:
         return {
             "latitude": lat, "longitude": lon,
@@ -383,22 +384,512 @@ async def get_disaster_and_cyclone_alerts(
 from app.agents.pfz_scoring import score_fishing_zone
 import asyncio
 
-@router.get("/pfz")
-async def pfz(lat: float = Query(...), lon: float = Query(...)):
-    chl, waves = await asyncio.gather(
-        get_chlorophyll(lat, lon),       # already defined above in this file
-        get_waves_and_swell(lat, lon),   # already defined above in this file
-    )
-    score = score_fishing_zone(chlorophyll=chl, waves=waves)
-    return {
-        "lat": lat,
-        "lon": lon,
-        "pfz_potential": score.get("chlorophyll_rating"),
-        "composite_score": score.get("confidence"),
-        "recommendation": "Recommended" if score.get("is_potential_zone") else "Not recommended",
-        "layers": {"chlorophyll": chl, "waves": waves},
-    }
+from fastapi import Query
+import asyncio
+import math
 
+
+def calculate_distance_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    """Haversine distance between two coordinates."""
+
+    R = 6371.0
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad)
+        * math.cos(lat2_rad)
+        * math.sin(dlon / 2) ** 2
+    )
+
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def distance_score(
+    distance_km: float,
+    max_radius_km: float = 50.0,
+) -> float:
+    """
+    100 = user is at the zone
+    0   = zone is at/over max radius
+    """
+
+    return max(
+        0.0,
+        100.0 * (1.0 - distance_km / max_radius_km)
+    )
+
+
+def build_candidate_points(
+    lat: float,
+    lon: float,
+    radius_km: float = 50.0,
+):
+    """
+    Generate candidate points around the user.
+
+    Includes the user's location plus concentric rings.
+    """
+
+    candidates = [(lat, lon)]
+
+    # Distance rings in km
+    rings = [5, 10, 20, 30, 40, 50]
+
+    # 8 directions gives reasonable coverage without
+    # making hundreds of expensive marine API requests.
+    bearings = range(0, 360, 45)
+
+    for distance_km in rings:
+        for bearing in bearings:
+            bearing_rad = math.radians(bearing)
+
+            # Approximate conversion from km to degrees.
+            dlat = (
+                distance_km
+                * math.cos(bearing_rad)
+                / 111.0
+            )
+
+            # Correct longitude distance for latitude.
+            cos_lat = max(
+                0.1,
+                math.cos(math.radians(lat))
+            )
+
+            dlon = (
+                distance_km
+                * math.sin(bearing_rad)
+                / (111.0 * cos_lat)
+            )
+
+            candidate_lat = lat + dlat
+            candidate_lon = lon + dlon
+
+            candidates.append(
+                (candidate_lat, candidate_lon)
+            )
+
+    return candidates
+
+
+async def evaluate_candidate(
+    user_lat: float,
+    user_lon: float,
+    candidate_lat: float,
+    candidate_lon: float,
+):
+    """
+    Evaluate one possible fishing zone.
+    """
+
+    try:
+        chl, waves = await asyncio.gather(
+            get_chlorophyll(
+                candidate_lat,
+                candidate_lon
+            ),
+            get_waves_and_swell(
+                candidate_lat,
+                candidate_lon
+            ),
+        )
+
+        score = score_fishing_zone(
+            chlorophyll=chl,
+            waves=waves,
+        )
+
+        try:
+            confidence = float(
+                score.get("confidence", 0)
+            )
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        confidence = max(
+            0.0,
+            min(100.0, confidence)
+        )
+
+        distance_km = calculate_distance_km(
+            user_lat,
+            user_lon,
+            candidate_lat,
+            candidate_lon,
+        )
+
+        dist_score = distance_score(
+            distance_km,
+            max_radius_km=50.0,
+        )
+
+        # Fishing quality is more important than distance.
+        final_score = (
+            0.70 * confidence
+            + 0.30 * dist_score
+        )
+
+        return {
+            "lat": candidate_lat,
+            "lon": candidate_lon,
+            "distance_km": round(distance_km, 2),
+            "confidence": round(confidence, 2),
+            "distance_score": round(dist_score, 2),
+            "final_score": round(final_score, 2),
+            "is_potential_zone": bool(
+                score.get("is_potential_zone")
+            ),
+            "layers": {
+                "chlorophyll": chl,
+                "waves": waves,
+            },
+        }
+
+    except Exception as e:
+        print(
+            f"PFZ candidate failed "
+            f"({candidate_lat}, {candidate_lon}): {e}"
+        )
+
+        return None
+
+
+import asyncio
+import math
+
+from fastapi import Query
+
+
+# ============================================================
+# DISTANCE
+# ============================================================
+
+def calculate_distance_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    """Calculate distance between two GPS coordinates."""
+
+    R = 6371.0
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_rad)
+        * math.cos(lat2_rad)
+        * math.sin(dlon / 2) ** 2
+    )
+
+    return R * 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a),
+    )
+
+
+# ============================================================
+# DISTANCE SCORE
+# ============================================================
+
+def calculate_distance_score(
+    distance_km: float,
+    max_radius_km: float = 50.0,
+) -> float:
+    """
+    100 = right next to user
+    0   = at/over max radius
+    """
+
+    score = 100.0 * (
+        1.0 - distance_km / max_radius_km
+    )
+
+    return max(0.0, min(100.0, score))
+
+
+# ============================================================
+# GENERATE CANDIDATE ZONES
+# ============================================================
+
+def build_candidate_points(
+    lat: float,
+    lon: float,
+):
+    """
+    Generate candidate PFZ locations around the user.
+
+    Rings:
+        5, 10, 20, 30, 40, 50 km
+
+    8 directions per ring.
+    """
+
+    candidates = [(lat, lon)]
+
+    rings_km = [5, 10, 20, 30, 40, 50]
+
+    bearings = range(0, 360, 45)
+
+    for distance_km in rings_km:
+
+        for bearing in bearings:
+
+            bearing_rad = math.radians(bearing)
+
+            dlat = (
+                distance_km
+                * math.cos(bearing_rad)
+                / 111.0
+            )
+
+            cos_lat = max(
+                0.1,
+                math.cos(math.radians(lat)),
+            )
+
+            dlon = (
+                distance_km
+                * math.sin(bearing_rad)
+                / (111.0 * cos_lat)
+            )
+
+            candidate_lat = lat + dlat
+            candidate_lon = lon + dlon
+
+            candidates.append(
+                (
+                    candidate_lat,
+                    candidate_lon,
+                )
+            )
+
+    return candidates
+
+
+# ============================================================
+# EVALUATE ONE CANDIDATE
+# ============================================================
+
+async def evaluate_pfz_candidate(
+    user_lat: float,
+    user_lon: float,
+    candidate_lat: float,
+    candidate_lon: float,
+):
+    try:
+
+        # Fetch marine data concurrently
+        chl, waves = await asyncio.gather(
+            get_chlorophyll(
+                candidate_lat,
+                candidate_lon,
+            ),
+            get_waves_and_swell(
+                candidate_lat,
+                candidate_lon,
+            ),
+        )
+
+        # Existing PFZ scoring function
+        score = score_fishing_zone(
+            chlorophyll=chl,
+            waves=waves,
+        )
+
+        # ----------------------------------------------------
+        # FISHING POTENTIAL
+        # ----------------------------------------------------
+
+        try:
+            potential = float(
+                score.get("confidence", 0)
+            )
+        except (TypeError, ValueError):
+            potential = 0.0
+
+        potential = max(
+            0.0,
+            min(100.0, potential),
+        )
+
+        # ----------------------------------------------------
+        # DISTANCE
+        # ----------------------------------------------------
+
+        distance_km = calculate_distance_km(
+            user_lat,
+            user_lon,
+            candidate_lat,
+            candidate_lon,
+        )
+
+        distance_score = calculate_distance_score(
+            distance_km,
+            max_radius_km=50.0,
+        )
+
+        # ----------------------------------------------------
+        # COMBINED RANKING SCORE
+        #
+        # Fishing potential matters more than distance.
+        # ----------------------------------------------------
+
+        final_score = (
+            0.70 * potential
+            + 0.30 * distance_score
+        )
+
+        return {
+            "lat": round(candidate_lat, 6),
+            "lon": round(candidate_lon, 6),
+
+            "distance_km": round(
+                distance_km,
+                2,
+            ),
+
+            # Numeric 0-100 value
+            "potential": round(
+                potential,
+                2,
+            ),
+
+            # Used internally / by frontend if needed
+            "score": round(
+                final_score,
+                2,
+            ),
+
+            "layers": {
+                "chlorophyll": chl,
+                "waves": waves,
+            },
+        }
+
+    except Exception as e:
+
+        print(
+            f"PFZ candidate failed "
+            f"({candidate_lat}, {candidate_lon}): {e}"
+        )
+
+        return None
+
+
+# ============================================================
+# PFZ ENDPOINT
+# ============================================================
+
+@router.get("/pfz")
+async def pfz(
+    lat: float = Query(...),
+    lon: float = Query(...),
+):
+    print("get pfz")
+    # --------------------------------------------------------
+    # 1. Generate candidate locations
+    # --------------------------------------------------------
+
+    candidates = build_candidate_points(
+        lat,
+        lon,
+    )
+
+    # --------------------------------------------------------
+    # 2. Evaluate all candidates concurrently
+    # --------------------------------------------------------
+
+    results = await asyncio.gather(
+        *[
+            evaluate_pfz_candidate(
+                user_lat=lat,
+                user_lon=lon,
+                candidate_lat=candidate_lat,
+                candidate_lon=candidate_lon,
+            )
+            for candidate_lat, candidate_lon in candidates
+        ]
+    )
+
+    # Remove failed candidates
+    results = [
+        result
+        for result in results
+        if result is not None
+    ]
+
+    if not results:
+        print("no results pfz")
+        return {
+            "user_location": {
+                "lat": lat,
+                "lon": lon,
+            },
+            "zones": [],
+        }
+
+    # --------------------------------------------------------
+    # 3. Remove very poor fishing areas
+    #
+    # Don't show garbage zones just because they're nearby.
+    # --------------------------------------------------------
+
+    MIN_POTENTIAL = 30.0
+
+    worthwhile_zones = [
+        result
+        for result in results
+        if result["potential"] >= MIN_POTENTIAL
+    ]
+
+    # If everything is poor, return the strongest few
+    if not worthwhile_zones:
+        worthwhile_zones = results
+
+    # --------------------------------------------------------
+    # 4. Rank zones
+    #
+    # 70% fishing potential
+    # 30% distance
+    # --------------------------------------------------------
+
+    worthwhile_zones.sort(
+        key=lambda zone: zone["score"],
+        reverse=True,
+    )
+
+    # --------------------------------------------------------
+    # 5. Return top 10 zones
+    # --------------------------------------------------------
+
+    top_zones = worthwhile_zones[:10]
+    final_dict={
+        "user_location": {
+            "lat": lat,
+            "lon": lon,
+        },
+
+        "zones": top_zones,
+    }
+    print(f"pfz: {final_dict}")
+    return final_dict
 
 @router.post("/full-advisory")
 async def get_full_marine_advisory(

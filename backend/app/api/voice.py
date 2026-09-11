@@ -29,7 +29,9 @@ class VoiceChatResponse(BaseModel):
 
 async def _transcribe(audio_bytes: bytes, filename: str, lang: str) -> str:
     """STT via Kaggle notebook - async"""
-    if not KAGGLE_STT_TTS_URL or KAGGLE_STT_TTS_URL.startswith("https://unsilent"):
+    print(KAGGLE_STT_TTS_URL)
+    print("transcribe")
+    if not KAGGLE_STT_TTS_URL:
         raise ValueError("KAGGLE_STT_TTS_URL not properly configured")
     
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -42,6 +44,7 @@ async def _transcribe(audio_bytes: bytes, filename: str, lang: str) -> str:
             )
             res.raise_for_status()
             data = res.json()
+            print(f"transcibe text: {data}")
             return data.get("text", "")
         except httpx.TimeoutException:
             raise HTTPException(status_code=504, detail="Speech recognition timed out")
@@ -76,7 +79,7 @@ def _prepare_text_for_tts(text: str) -> str:
 
 async def _synthesize(text: str, lang: str = "en") -> bytes:
     """TTS via Kaggle notebook - async with text sanitization"""
-    if not KAGGLE_STT_TTS_URL or KAGGLE_STT_TTS_URL.startswith("https://unsilent"):
+    if not KAGGLE_STT_TTS_URL:
         raise ValueError("KAGGLE_STT_TTS_URL not properly configured")
     
     # Sanitize and validate
@@ -168,6 +171,7 @@ async def speech_to_text(audio: UploadFile = File(...), lang: str = "hi"):
 @router.post("/tts")
 async def text_to_speech(text: str = Form(...), lang: str = Form("en")):
     """Text-to-speech endpoint"""
+    print(f"voice/tts data: {text}")
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="No text provided")
     
@@ -314,3 +318,50 @@ async def voice_chat_text_only(
         pass
     
     return VoiceChatResponse(user_text=user_text.strip(), answer_text=answer_text)
+
+from fastapi import APIRouter, UploadFile, File
+from app.agents.llm_client import call_llm  # your switchable LLM client
+
+
+
+INTENT_PROMPT = """Classify the fisherman's spoken request into exactly one intent.
+Intents: goto_nearest_pfz, goto_map, goto_chat, goto_weather, explain_context, unknown
+Reply with ONLY JSON: {"intent": "...", "raw_text": "..."}
+
+Examples:
+"take me to nearest fishing zone" -> {"intent":"goto_nearest_pfz"}
+"show me the map" -> {"intent":"goto_map"}
+"open fleet chat" -> {"intent":"goto_chat"}
+"what's the weather" -> {"intent":"goto_weather"}
+"what am I seeing" / "explain this" -> {"intent":"explain_context"}
+
+User said: "{text}"
+"""
+
+
+
+@router.post("/intent")
+async def voice_intent(audio: UploadFile = File(...), lang: str = "en"):
+    print("voice intent")
+    audio_bytes = await audio.read()
+    stt_text = await _transcribe(audio_bytes, audio.filename or "voice.webm", lang) # your existing STT call
+
+    resp = await call_llm(
+        messages=[
+            {
+                "role": "user",
+                "content": INTENT_PROMPT.replace("{text}", stt_text),
+            }
+        ],
+        reasoning_effort=None,
+        max_tokens=60,
+    )
+
+    import json
+    try:
+        parsed = json.loads(resp.strip())
+    except Exception:
+        parsed = {"intent": "unknown"}
+
+    parsed["raw_text"] = stt_text
+    return parsed

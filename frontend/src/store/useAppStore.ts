@@ -1,8 +1,17 @@
 import { create } from 'zustand';
-import api, { type Harbor } from '../api/client';
+
+import api, {
+  type Harbor,
+  type PFZResponse,
+} from '../api/client';
+
+import { advisoryToWeather } from '../api/adapters';
+
 import {
-  advisoryToWeather,
-} from '../api/adapters';
+  calculateDistanceKm,
+  calculateETA,
+} from '../utils/geo';
+
 import type {
   PFZData,
   WeatherData,
@@ -140,6 +149,7 @@ interface AppState {
   isOffline: boolean;
   setOffline: (offline: boolean) => void;
   refreshMarine: () => Promise<void>;
+  fetchPfz: () => Promise<void>;
 
   // PFZ & Progressive Disclosure
   pfzs: PFZData[];
@@ -173,6 +183,32 @@ interface AppState {
   userId: string | null;
   setUserId: (id: string | null) => void;
   logout: () => void;
+}
+function pfzZoneToData(zone: any, index: number, boat: Location): PFZData {
+  const potentialNum = Number(zone.potential ?? 0);
+  const potential: PFZData['potential'] =
+    potentialNum >= 70 ? 'High' : potentialNum >= 40 ? 'Moderate' : 'Low';
+
+  const chl = zone.layers?.chlorophyll ?? {};
+  const waves = zone.layers?.waves ?? {};
+  const distanceKm = Number(zone.distance_km ?? calculateDistanceKm(boat.lat, boat.lng, zone.lat, zone.lon));
+
+  return {
+    id: `pfz-${index}-${zone.lat}-${zone.lon}`,
+    name: `PFZ ${index + 1}`,
+    lat: zone.lat,
+    lng: zone.lon,
+    potential,
+    score: potentialNum, // drives the confidence color
+    distanceKm,
+    travelTimeMin: calculateETA(distanceKm),
+    waveHeightM: Number(waves.wave_height_m ?? 0),
+    windSpeedKmh: Number(waves.wind_speed_kmh ?? 0),
+    sstCelsius: 0, // not returned by /api/marine/pfz today
+    chlorophyllMgM3: Number(chl.chlorophyll_mg_m3 ?? 0),
+    seaCondition: String(waves.safety_index ?? 'Unknown'),
+    recommendationReason: '',
+  };
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -215,6 +251,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   location: null,
   setLocation: (loc) => set({ location: loc }),
+  
   marineContext: 'harbour',
   setMarineContext: (ctx) => set({ marineContext: ctx }),
 
@@ -268,37 +305,104 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch { /* silent */ }
   },
 
-  refreshMarine: async () => {
-    const { location, isOffline } = get();
-    set({ isRefreshing: true });
+ refreshMarine: async () => {
+  const { location, isOffline } = get();
 
-    if (isOffline) {
-      setTimeout(() => set({ isRefreshing: false, lastRefreshedMinutesAgo: 0, lastRefreshedLabel: 'OFFLINE · No cached data' }), 400);
-      return;
-    }
-    if (!location) {
-      set({ isRefreshing: false, lastRefreshedLabel: '' });
-      return;
-    }
+  set({ isRefreshing: true });
 
-    try {
-      const [advisory, harbors] = await Promise.all([
-        api.marine.fullAdvisory(location.lat, location.lng).catch(() => null),
-        api.advisory.harbors().catch(() => []),
-      ]);
-
-      if (advisory) set({ weather: advisoryToWeather(advisory) });
-
+  if (isOffline) {
+    setTimeout(() => {
       set({
-        harbors,
         isRefreshing: false,
-        lastRefreshedLabel: 'LIVE · Just now',
-        dataFreshness: { weatherMins: 1, oceanMins: 1, satelliteMins: 1 },
+        lastRefreshedMinutesAgo: 0,
+        lastRefreshedLabel: 'OFFLINE · No cached data',
       });
-    } catch {
-      set({ isRefreshing: false, lastRefreshedLabel: '' });
+    }, 400);
+
+    return;
+  }
+
+  if (!location) {
+    set({
+      isRefreshing: false,
+      lastRefreshedLabel: '',
+    });
+
+    return;
+  }
+
+  try {
+const [advisory, harbors, pfzRaw] = await Promise.all([
+  api.marine.fullAdvisory(location.lat, location.lng).catch(() => null),
+  api.advisory.harbors().catch(() => []),
+  fetch(`${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/api/marine/pfz?lat=${location.lat}&lon=${location.lng}`)
+    .then(r => r.ok ? r.json() : null)
+    .catch(() => null),
+]);
+
+const zones: any[] = pfzRaw?.zones ?? [];
+const pfzData: PFZData[] = zones.map((z, i) => pfzZoneToData(z, i, location));
+
+    if (advisory) {
+      set({
+        weather: advisoryToWeather(advisory),
+      });
     }
-  },
+
+    set({
+      harbors,
+      pfzs: pfzData,
+      isRefreshing: false,
+      lastRefreshedLabel: 'LIVE · Just now',
+      dataFreshness: {
+        weatherMins: 1,
+        oceanMins: 1,
+        satelliteMins: 1,
+      },
+    });
+
+    console.log('PFZs loaded:', pfzData);
+  } catch (error) {
+    console.error('Marine refresh failed:', error);
+
+    set({
+      isRefreshing: false,
+      lastRefreshedLabel: '',
+    });
+  }
+},
+ fetchPfz: async () => {
+  const { location } = get();
+
+  if (!location) {
+    console.error('PFZ fetch skipped: no GPS location');
+    return;
+  }
+
+  try {
+    const BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+    const res = await fetch(
+      `${BASE}/api/marine/pfz?lat=${location.lat}&lon=${location.lng}`
+    );
+
+    if (!res.ok) {
+      throw new Error(`PFZ request failed: ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    console.log('PFZ response:', data);
+
+    // Store ALL returned PFZ zones
+    set({
+      pfzs: data.zones || [],
+    });
+
+  } catch (err) {
+    console.error('PFZ fetch failed:', err);
+  }
+},
 
   chatMessages: [],
   isChatSending: false,
@@ -316,12 +420,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({ isChatSending: true, chatMessages: [...chatMessages, userMsg] });
 
-    try {
-      const res = await api.chat.message(
-        sessionId(), trimmed, undefined, undefined, language,
-        userId ? parseInt(userId) : undefined,
-        context
-      );
+try {
+  const res = await api.chat.message(
+    sessionId(),
+    trimmed,
+    undefined,
+    undefined,
+    userId ? parseInt(userId) : undefined,
+  );
       const reply = res.response?.trim() || '';
       set({
         isChatSending: false,

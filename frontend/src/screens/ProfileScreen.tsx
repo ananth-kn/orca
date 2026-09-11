@@ -78,14 +78,28 @@ export const ProfileScreen: React.FC = () => {
     window.setTimeout(() => setSaved(false), 1800);
   };
 
-  const handleSignOut = () => {
-    ['orca_user_id', 'orca_lang', 'orca_name', 'orca_email', 'orca_phone',
-     'orca_emer_name', 'orca_emer_relation', 'orca_emer_phone'].forEach((k) =>
-      window.localStorage.removeItem(k)
-    );
-    window.dispatchEvent(new CustomEvent('orca:login-ok'));
-  };
+const handleSignOut = async () => {
+  try {
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+    await fetch(`${API_BASE_URL}/api/user/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } finally {
+    [
+      'orca_user_id',
+      'orca_lang',
+      'orca_name',
+      'orca_email',
+      'orca_phone',
+      'orca_emer_name',
+      'orca_emer_relation',
+      'orca_emer_phone',
+    ].forEach((k) => window.localStorage.removeItem(k));
 
+    window.dispatchEvent(new CustomEvent('orca:login-ok'));
+  }
+};
   const inputCls =
     'w-full bg-white/[0.05] border border-white/10 rounded-xl px-3.5 py-2.5 text-white text-sm placeholder-white/30 outline-none focus:border-sky-400/60 focus:bg-white/[0.07]';
 

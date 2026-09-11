@@ -4,9 +4,11 @@ import re
 import time
 import logging
 import uuid
+from fastapi import Depends
 from datetime import datetime, timezone
 from typing import Optional
-
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 from app.agents.llm_client import call_llm
 from app.agents.geocoding import resolve_location
 from app.agents.tools.sst_tool import fetch_sst
@@ -17,42 +19,266 @@ from app.agents.tools.alerts_tool import fetch_alerts
 from app.agents.pfz_scoring import score_fishing_zone
 from app.agents.safety import assess_sea_safety
 from app.services.marine_data import MarineDataService
-
+from models.chat import ChatHistory
+from core.database import get_db
+from app.services.marine_tools import run_tools
 logger = logging.getLogger("orca.pipeline")
 
-SIMPLE_GREETINGS = {
-    "hi", "hello", "hey", "hii", "helo", "hola",
-    "good morning", "good afternoon", "good evening", "good night",
-    "thanks", "thank you", "thankyou", "thx", "ok", "okay", "nice", "great",
-    "bye", "goodbye", "see you", "later", "tata",
-    "namaste", "vanakkam", "namaskar", "नमस्ते", "வணக்கம்"
+ROUTER_PROMPT = """You are ORCA's query router.
+
+Your job is to analyze the user's request and return ONLY valid JSON.
+Do not explain your reasoning.
+Do not answer marine-data questions yourself.
+Your job is to identify the user's intent, required tools, language, location requirements, and forecast requirements.
+
+OUTPUT FORMAT
+
+For greetings, thanks, simple definitions, or casual conversation:
+
+{
+  "mode": "direct",
+  "answer": "<short answer>"
 }
 
-SIMPLE_DEFINITIONS = {
-    "what is sst", "what is pfz", "what is chlorophyll", "define sst", "define pfz",
-    "meaning of sst", "meaning of pfz", "sst meaning", "pfz meaning",
-    "what does sst mean", "what does pfz mean", "what is sea surface temperature",
-    "what is potential fishing zone", "what is chlorophyll", "sst என்றால் என்ன",
-    "pfz என்றால் என்ன", "क्या है sst", "क्या है pfz"
+For requests requiring marine, weather, environmental, fishing, navigation, or safety data:
+
+{
+  "mode": "data",
+  "intent": "<intent>",
+  "language": "<lang>",
+  "tools": ["<tool1>", "<tool2>"],
+  "needs_location": true/false,
+  "needs_forecast": true/false,
+  "location_query": "<place name if explicitly mentioned, otherwise null>",
+  "species": "<species if mentioned, otherwise null>"
 }
 
-ROUTER_PROMPT = """You are ORCA's query router. Analyze and return ONLY valid JSON.
+INTENTS
 
-For simple greetings/thanks/definitions: {"mode":"direct","answer":"<2-3 sentence response>"}
-For marine data queries: {"mode":"data","intent":"<intent>","language":"<lang>","tools":[<list>],"needs_location":true/false,"needs_forecast":true/false,"location_query":"<place name if mentioned>"}
+general
+weather
+marine_conditions
+safety
+pfz
+fishing_productivity
+species_fishing
+alerts
+forecast
+navigation
+route_planning
 
-Intent types: general, marine_conditions, weather, safety, pfz, fishing_productivity, alerts, forecast
-Tools: sst, chlorophyll, waves, weather, alerts, pfz
-Languages: en, hi, ta, te, kn, ml, mr, gu, bn, or
+TOOLS
 
-CRITICAL: Use MINIMUM required tools. Safety needs waves+alerts only. PFZ needs chlorophyll+waves. Don't fetch unnecessary data.
+weather
+waves
+wind
+sst
+chlorophyll
+currents
+salinity
+bathymetry
+pfz
+alerts
+gis
+species
+fish_habitat
+historical_catch
+ports
+route
+marine_hazards
 
-Examples:
-"hi" → {"mode":"direct","answer":"Hi! I'm ORCA. Ask me about sea conditions, weather, fishing zones, or marine safety."}
-"what is PFZ?" → {"mode":"direct","answer":"PFZ (Potential Fishing Zone) indicates areas with favorable oceanographic conditions for fish, based on sea temperature, chlorophyll, and currents."}
-"is it safe tomorrow?" → {"mode":"data","intent":"safety","tools":["waves","weather","alerts"],"needs_location":true,"needs_forecast":true}
-"nearest PFZ?" → {"mode":"data","intent":"pfz","tools":["chlorophyll","sst"],"needs_location":true}
-"wave height?" → {"mode":"data","intent":"marine_conditions","tools":["waves"],"needs_location":true}"""
+TOOL MEANINGS
+
+weather:
+Atmospheric weather including temperature, rainfall, wind, pressure, humidity, visibility, clouds and storms.
+
+waves:
+Wave height, wave period, wave direction and swell conditions.
+
+wind:
+Wind speed and direction, especially when specifically requested or required for marine/safety analysis.
+
+sst:
+Sea Surface Temperature.
+
+chlorophyll:
+Chlorophyll-a and ocean productivity indicators.
+
+currents:
+Ocean current speed and direction.
+
+salinity:
+Sea-water salinity.
+
+bathymetry:
+Water depth and underwater terrain.
+
+pfz:
+Official Potential Fishing Zone advisories or PFZ locations.
+
+alerts:
+Official weather, cyclone, high-wave and other relevant alerts.
+
+gis:
+Coastlines, EEZ, fishing/restricted zones, marine protected areas, ports, islands and other geographic layers.
+
+species:
+Species information and species-specific habitat requirements.
+
+fish_habitat:
+Calculated species habitat suitability using environmental and geographic data.
+
+historical_catch:
+Historical fishing/catch information.
+
+ports:
+Ports, harbours and landing centres.
+
+route:
+Distance, route feasibility and estimated travel time between locations.
+
+marine_hazards:
+Navigation hazards, restricted areas, dangerous marine conditions and related geographic hazards.
+
+TOOL SELECTION RULES
+
+Use the MINIMUM required tools.
+Do not select tools merely because they could be useful.
+Only select tools required to answer the user's question.
+
+Weather:
+"what's the weather?"
+→ ["weather"]
+
+Marine conditions:
+"what are the sea conditions?"
+→ ["waves", "wind", "sst"]
+
+Wave question:
+"what is the wave height?"
+→ ["waves"]
+
+Wind question:
+"what is the wind speed?"
+→ ["wind"]
+
+SST question:
+"what is the sea temperature?"
+→ ["sst"]
+
+Chlorophyll/productivity:
+"what is the chlorophyll?"
+→ ["chlorophyll"]
+
+"where is ocean productivity high?"
+→ ["chlorophyll", "sst"]
+
+Safety:
+"Is it safe to go fishing tomorrow?"
+→ ["waves", "weather", "alerts"]
+
+"Is the sea safe?"
+→ ["waves", "alerts"]
+
+Alerts:
+"Are there any warnings?"
+→ ["alerts"]
+
+PFZ:
+"Where are the potential fishing zones?"
+→ ["pfz"]
+
+"Where is the nearest PFZ?"
+→ ["pfz", "gis"]
+
+Species fishing:
+"Where can I find sardines?"
+→ ["species", "fish_habitat", "sst", "chlorophyll", "bathymetry"]
+
+"Where can I find tuna tomorrow?"
+→ ["species", "fish_habitat", "sst", "chlorophyll", "waves", "pfz"]
+
+Fishing productivity:
+"Is this a good area for fishing?"
+→ ["chlorophyll", "sst", "waves", "pfz"]
+
+"Which area has better fishing conditions?"
+→ ["chlorophyll", "sst", "currents", "pfz"]
+
+Navigation:
+"What is near this location?"
+→ ["gis", "bathymetry"]
+
+"How far is the fishing zone from here?"
+→ ["gis", "route"]
+
+"Can I reach this fishing zone safely?"
+→ ["route", "waves", "weather", "alerts", "marine_hazards"]
+
+Route planning:
+"Plan a fishing trip to this location."
+→ ["route", "weather", "waves", "alerts", "gis"]
+
+IMPORTANT RULES
+
+1. Do not invent tool names.
+2. Do not select unnecessary tools.
+3. If the user asks about a future time such as today, tomorrow, this evening, or next week, set needs_forecast to true.
+4. If the request concerns the user's current location, set needs_location to true.
+5. If the user explicitly provides a place, put that place in location_query.
+6. If no location is explicitly mentioned but location is required, set needs_location to true and location_query to null.
+7. If a species is mentioned, put its name in species.
+8. Do not assume that high chlorophyll automatically means high fish abundance.
+9. Do not make scientific conclusions yourself. The backend analysis engine determines suitability, safety, productivity and habitat scores.
+10. Do not use RAG yourself. Scientific knowledge retrieval and explanation happen after the data and analysis stages.
+11. Multiple tools are allowed when the question genuinely requires multiple data sources.
+12. Preserve the user's requested time horizon.
+13. For simple definitions, use mode="direct".
+14. For greetings or thanks, use mode="direct".
+15. Return ONLY JSON. No markdown. No code fences. No explanation.
+
+LANGUAGES
+Return the language code that best matches the user's language:
+en = English
+hi = Hindi
+ta = Tamil
+te = Telugu
+kn = Kannada
+ml = Malayalam
+mr = Marathi
+gu = Gujarati
+bn = Bengali
+or = Odia
+
+If uncertain, use "en".
+EXAMPLES
+
+"hi"
+→ {"mode": "direct","answer": "Hi! I'm ORCA. Ask me about weather, sea conditions, fishing zones, marine safety, onavigation."
+}
+
+"what is PFZ?"
+→ {"mode": "direct","answer": "PFZ stands for Potential Fishing Zone. It identifies areas where ocean conditions arfavourable for fish aggregation based on environmental and oceanographic indicators."
+}
+
+"what is the wave height near Kochi?"
+→ {"mode": "data","intent": "marine_conditions","language": "en","tools": ["waves"],"needs_location": true,"needs_forecast": false,"location_query": "Kochi","species": null
+}
+
+"is it safe to fish tomorrow near Kochi?"
+→ {"mode": "data","intent": "safety","language": "en","tools": ["waves", "weather", "alerts"],"needs_location": true,"needs_forecast": true,"location_query": "Kochi","species": null
+}
+
+"where can I find sardines tomorrow?"
+→ {"mode": "data","intent": "species_fishing","language": "en","tools": ["species", "fish_habitat", "sst", "chlorophyll", "waves", "pfz"],"needs_location": true,"needs_forecast": true,"location_query": null,"species": "sardines"
+}
+"are there any cyclone warnings?"
+→ {
+  "mode": "data","intent": "alerts","language": "en","tools": ["alerts"],"needs_location": false,"needs_forecast": true,"location_query": null,"species": null
+}
+"plan a trip from Kochi to a fishing zone tomorrow"
+→ {"mode": "data","intent": "route_planning","language": "en","tools": ["route", "gis", "weather", "waves", "alerts"],"needs_location": true,"needs_forecast": true,"location_query": "Kochi","species": null
+}"""
 
 FINAL_PROMPT = """You are ORCA, a marine safety assistant for Indian fishermen. Answer the user's ACTUAL question first using ONLY the evidence below.
 
@@ -130,28 +356,14 @@ def _get_context(session_id: str) -> ConversationContext:
         _session_contexts[session_id] = ConversationContext()
     return _session_contexts[session_id]
 
-def _is_simple_greeting(query: str) -> bool:
-    normalized = query.lower().strip().replace(".", "").replace("?", "").replace("!", "")
-    return normalized in SIMPLE_GREETINGS or len(normalized.split()) <= 2 and any(g in normalized for g in ["hi", "hello", "hey", "thanks", "bye"])
-
-def _is_simple_definition(query: str) -> bool:
-    normalized = query.lower().strip()
-    return any(d in normalized for d in SIMPLE_DEFINITIONS) or (
-        ("what is" in normalized or "what does" in normalized or "meaning of" in normalized or "define" in normalized) 
-        and any(term in normalized for term in ["sst", "pfz", "chlorophyll", "potential fishing zone", "sea surface temperature"])
+def get_chat_history(session_id: str, db: Session):
+    result = db.execute(
+        select(ChatHistory)
+        .where(ChatHistory.session_id == session_id)
+        .order_by(ChatHistory.created_at.asc())
     )
+    return result.scalars().all()
 
-def _get_definition_answer(query: str, lang: str) -> Optional[str]:
-    normalized = query.lower()
-    lang_dict = DEFINITION_ANSWERS.get(lang, DEFINITION_ANSWERS["en"])
-    
-    if "sst" in normalized or "sea surface temperature" in normalized:
-        return lang_dict.get("sst", DEFINITION_ANSWERS["en"]["sst"])
-    elif "pfz" in normalized or "potential fishing zone" in normalized:
-        return lang_dict.get("pfz", DEFINITION_ANSWERS["en"]["pfz"])
-    elif "chlorophyll" in normalized or "क्लोरोफिल" in normalized or "குளோரோபில்" in normalized:
-        return lang_dict.get("chlorophyll", DEFINITION_ANSWERS["en"]["chlorophyll"])
-    return None
 
 def _get_token_budget(mode: str, intent: str) -> tuple[int, int]:
     """Return (router_tokens, final_tokens) based on query complexity"""
@@ -167,6 +379,44 @@ def _get_token_budget(mode: str, intent: str) -> tuple[int, int]:
     else:
         return (400, 600)
 
+COMPACT_FIELDS_BY_INTENT = {
+    "safety": {
+        "waves": [
+            "wave_height_m",
+            "wave_direction_deg",
+            "wave_period_s",
+            "swell_period_s",
+            "safety_index",
+            "timestamp",
+            "source",
+        ],
+        "alerts": [
+            "active_cyclones",
+            "tsunami_threat",
+            "alert_level",
+            "message",
+            "timestamp",
+            "source",
+            "alerts",
+        ],
+    },
+
+    "pfz": {
+        "chlorophyll": [
+            "chlorophyll_mg_m3",
+            "timestamp",
+            "source",
+        ],
+        "waves": [
+            "wave_height_m",
+            "wave_direction_deg",
+            "wave_period_s",
+            "swell_period_s",
+            "timestamp",
+            "source",
+        ],
+    },
+}
 async def process_chat_query(
     query: str,
     lang: str = "en",
@@ -174,286 +424,442 @@ async def process_chat_query(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     user_id: Optional[int] = None,
-    context: str = "",
+    db: Session = None,
 ) -> dict:
     print(f"process chat query, data given lat: {lat}, lon: {lon}")
-    """Optimized conversational pipeline with fast-path for simple queries"""
+
     request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
-    
+
     ctx = _get_context(session_id) if session_id else ConversationContext()
-    
+
     if not lang and ctx:
         lang = ctx.language
-    
+
     query_clean = query.strip()
+
     if not query_clean:
         logger.info(f"[{request_id}] Empty query")
+
         return {
-            "answer": "I didn't receive a question. How can I help you with marine conditions, weather, or fishing zones?",
+            "answer": (
+                "I didn't receive a question. How can I help you with "
+                "marine conditions, weather, or fishing zones?"
+            ),
             "mode": "direct",
             "language": lang,
-            "location": {"lat": lat, "lon": lon, "name": None},
+            "location": {
+                "lat": lat,
+                "lon": lon,
+                "name": None,
+            },
             "intent": "empty",
             "sources": [],
             "confidence": "high",
             "needs_data": False,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-    
-    if _is_simple_greeting(query_clean):
-        greetings = {
-            "en": "Hi! I'm ORCA, your marine assistant. Ask me about sea conditions, weather, fishing zones, or safety.",
-            "hi": "नमस्ते! मैं ORCA हूं, आपका समुद्री सहायक। मुझसे समुद्र की स्थिति, मौसम, मछली पकड़ने के क्षेत्र या सुरक्षा के बारे में पूछें।",
-            "ta": "வணக்கம்! நான் ORCA, உங்கள் கடல் உதவியாளர். கடல் நிலைமைகள், வானிலை, மீன்பிடி மண்டலங்கள் அல்லது பாதுகாப்பு பற்றி என்னிடம் கேளுங்கள்.",
-            "te": "నమస్కారం! నేను ORCA, మీ సముద్ర సహాయకుడు. సముద్ర పరిస్థితులు, వాతావరణం, చేపలు పట్టే ప్రాంతాలు లేదా భద్రత గురించి నన్ను అడగండి.",
-            "kn": "ನಮಸ್ಕಾರ! ನಾನು ORCA, ನಿಮ್ಮ ಸಮುದ್ರ ಸಹಾಯಕ. ಸಮುದ್ರ ಪರಿಸ್ಥಿತಿಗಳು, ಹವಾಮಾನ, ಮೀನುಗಾರಿಕೆ ವಲಯಗಳು ಅಥವಾ ಸುರಕ್ಷತೆಯ ಬಗ್ಗೆ ನನ್ನನ್ನು ಕೇಳಿ.",
-            "ml": "നമസ്കാരം! ഞാൻ ORCA, നിങ്ങളുടെ കടൽ സഹായി. കടൽ അവസ്ഥകൾ, കാലാവസ്ഥ, മത്സ്യബന്ധന മേഖലകൾ അല്ലെങ്കിൽ സുരക്ഷയെക്കുറിച്ച് എന്നോട് ചോദിക്കൂ.",
-        }
-        answer = greetings.get(lang, greetings["en"])
-        ctx.update(language=lang, intent="greeting", query=query_clean)
-        
-        logger.info(f"[{request_id}] Greeting fast-path | lang={lang} | {time.time()-start_time:.2f}s")
-        
-        return {
-            "answer": answer,
-            "mode": "direct",
-            "language": lang,
-            "location": {"lat": lat, "lon": lon, "name": None},
-            "intent": "greeting",
-            "sources": [],
-            "confidence": "high",
-            "needs_data": False,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    
-    if _is_simple_definition(query_clean):
-        definition_answer = _get_definition_answer(query_clean, lang)
-        if definition_answer:
-            ctx.update(language=lang, intent="definition", query=query_clean)
-            logger.info(f"[{request_id}] Definition fast-path | lang={lang} | {time.time()-start_time:.2f}s")
-            return {
-                "answer": definition_answer,
-                "mode": "direct",
-                "language": lang,
-                "location": {"lat": lat, "lon": lon, "name": None},
-                "intent": "definition",
-                "sources": [],
-                "confidence": "high",
-                "needs_data": False,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-    
-    compact_history = ctx.get_compact_history() if ctx else ""
-    router_context = f"Query: {query_clean}\nLang: {lang}\nLat: {lat}, Lon: {lon}"
+
+    history = get_chat_history(session_id, db)
+
+    compact_history = "\n".join(
+        f"{msg.role}: {msg.message}"
+        for msg in history[-10:]
+    )
+
+    router_context = (
+        f"Query: {query_clean}\n"
+        f"Lang: {lang}\n"
+        f"Lat: {lat}, Lon: {lon}"
+    )
+
     if compact_history:
-        router_context += f"\nContext: {compact_history}"
-    
+        router_context += (
+            f"\nConversation History:\n{compact_history}"
+        )
+
+    # ---------------------------------------------------------
+    # ROUTER
+    # ---------------------------------------------------------
+
     try:
-        print("call llm with router prompt")
-        print(f"router context: {router_context}")
         route_text = await call_llm(
             messages=[
-                {"role": "system", "content": ROUTER_PROMPT},
-                {"role": "user", "content": router_context},
+                {
+                    "role": "system",
+                    "content": ROUTER_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": router_context,
+                },
             ],
             temperature=0.05,
             max_tokens=10000,
             reasoning_effort=None,
         )
 
-        
         text = route_text.strip()
+
         if text.startswith("```json"):
             text = text[7:]
+
         if text.endswith("```"):
             text = text[:-3]
+
         text = text.strip()
-        print(f"text from planner: {text}")
+
         plan = json.loads(text)
+
     except Exception as e:
         raw_preview = "N/A"
+
         try:
-            if 'route_text' in locals():
+            if "route_text" in locals():
                 raw_preview = route_text[:200]
-        except:
+        except Exception:
             pass
-        logger.warning(f"[{request_id}] Router parse failed: {e} | raw: {raw_preview}")
-        plan = {"mode": "data", "intent": "marine_conditions", "needs_location": True, "tools": ["waves"]}
-    
+
+        logger.warning(
+            f"[{request_id}] Router parse failed: "
+            f"{e} | raw: {raw_preview}"
+        )
+
+        plan = {
+            "mode": "data",
+            "intent": "marine_conditions",
+            "needs_location": True,
+            "tools": ["waves"],
+        }
+
     detected_lang = plan.get("language", lang)
     intent = plan.get("intent", "general")
-    
+
+    # ---------------------------------------------------------
+    # DIRECT RESPONSE
+    # ---------------------------------------------------------
+
     if plan.get("mode") == "direct" and plan.get("answer"):
         answer = plan["answer"]
-        ctx.update(language=detected_lang, intent=intent, query=query_clean)
-        
-        logger.info(f"[{request_id}] Router direct mode | intent={intent} | lang={detected_lang} | {time.time()-start_time:.2f}s")
-        
+
+        ctx.update(
+            language=detected_lang,
+            intent=intent,
+            query=query_clean,
+        )
+
         return {
             "answer": answer,
             "mode": "direct",
             "language": detected_lang,
-            "location": {"lat": lat, "lon": lon, "name": None},
+            "location": {
+                "lat": lat,
+                "lon": lon,
+                "name": None,
+            },
             "intent": intent,
             "sources": [],
             "confidence": "high",
             "needs_data": False,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-    
+
+    # ---------------------------------------------------------
+    # LOCATION
+    # ---------------------------------------------------------
+
     needs_location = plan.get("needs_location", False)
     location_query = plan.get("location_query")
-    
+
     if needs_location:
+
         if lat is None or lon is None:
             if ctx and ctx.location:
                 loc_parts = ctx.location.split(":")
+
                 if len(loc_parts) == 2:
                     try:
                         lat = float(loc_parts[0])
                         lon = float(loc_parts[1])
-                    except:
+                    except (TypeError, ValueError):
                         pass
-        
+
         if (lat is None or lon is None) and location_query:
             try:
                 lat, lon = await resolve_location(location_query)
-                print(f"lat: {lat}, lon: {lon}")
-            except ValueError as e:
+
+                print(
+                    f"Resolved location: lat={lat}, lon={lon}"
+                )
+
+            except ValueError:
                 return {
-                    "error": f"Could not find location: {location_query}",
+                    "error": (
+                        f"Could not find location: "
+                        f"{location_query}"
+                    ),
                     "language": detected_lang,
                     "mode": "error",
                     "intent": intent,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
                 }
-        
+
         if lat is None or lon is None:
             return {
-                "error": "Please specify a location or enable location access.",
+                "error": (
+                    "Please specify a location or enable "
+                    "location access."
+                ),
                 "language": detected_lang,
                 "mode": "error",
                 "intent": intent,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(
+                    timezone.utc
+                ).isoformat(),
             }
-    
-    if lat and lon:
-        ctx.update(location=f"{lat}:{lon}")
-    
+
+    if lat is not None and lon is not None:
+        ctx.update(
+            location=f"{lat}:{lon}"
+        )
+
+    # ---------------------------------------------------------
+    # RUN TOOLS
+    # ---------------------------------------------------------
+
     tools_needed = plan.get("tools", [])
-    
-    tool_tasks = []
-    tool_names = []
-    for tool_name in tools_needed:
-        if tool_name in TOOL_REGISTRY and lat is not None and lon is not None:
-            tool_tasks.append(TOOL_REGISTRY[tool_name](lat, lon))
-            tool_names.append(tool_name)
-    
     results = {}
-    if tool_tasks:
-        try:
-            gathered = await asyncio.wait_for(
-                asyncio.gather(*tool_tasks, return_exceptions=True),
-                timeout=15.0
-            )
-            for i, result in enumerate(gathered):
-                if not isinstance(result, Exception):
-                    results[tool_names[i]] = result
-        except asyncio.TimeoutError:
-            pass
-    
-    evidence = {"tools": results}
-    
-    if plan.get("needs_alerts"):
-        try:
-            alerts_result = await asyncio.wait_for(
-                MarineDataService.get_disaster_alerts(lat, lon, 200.0),
-                timeout=8.0
-            )
-            evidence["alerts"] = alerts_result
-        except:
-            evidence["alerts"] = {"status": "unavailable"}
-    
-    if plan.get("needs_forecast"):
-        try:
-            from app.services.weather_service import get_forecast_async
-            forecast_result = await asyncio.wait_for(
-                get_forecast_async(lat, lon),
-                timeout=8.0
-            )
-            evidence["forecast"] = forecast_result
-        except:
-            evidence["forecast"] = {"status": "unavailable"}
-    
-    if intent == "pfz" or ("chlorophyll" in results and "waves" in results):
+
+    if (
+        tools_needed
+        and lat is not None
+        and lon is not None
+    ):
+        print(f"tools needed: {tools_needed}")
+
+        results = await run_tools(
+            tools=tools_needed,
+            lat=lat,
+            lon=lon,
+        )
+
+    print(
+        f"evidence from tools: "
+        f"{json.dumps(results, default=str, ensure_ascii=False)}"
+    )
+
+    # ---------------------------------------------------------
+    # DERIVED ASSESSMENTS
+    # ---------------------------------------------------------
+
+    evidence = {
+        "tools": results
+    }
+
+    # Fishing potential
+    if (
+        intent == "pfz"
+        or (
+            "chlorophyll" in results
+            and "waves" in results
+        )
+    ):
         evidence["pfz_assessment"] = score_fishing_zone(
             chlorophyll=results.get("chlorophyll"),
             waves=results.get("waves"),
         )
-    
+
+    # Wave-condition assessment
     if "waves" in results:
-        evidence["safety_assessment"] = assess_sea_safety(results.get("waves"))
-    
+        evidence["safety_assessment"] = assess_sea_safety(
+            results["waves"]
+        )
+
+    # ---------------------------------------------------------
+    # SMART EVIDENCE COMPACTION
+    # ---------------------------------------------------------
+
     compact_evidence = {}
-    for key, val in evidence.items():
-        if key == "tools":
-            compact_tools = {}
-            for tool_name, tool_data in val.items():
-                if isinstance(tool_data, dict):
-                    relevant = {k: v for k, v in tool_data.items() if k in [
-                        "sst_celsius", "chlorophyll_mg_m3", "wave_height_m", 
-                        "wave_direction_deg", "swell_period_s", "safety_index",
-                        "timestamp", "source", "lat", "lon"
-                    ]}
-                    compact_tools[tool_name] = relevant
-            compact_evidence["tools"] = compact_tools
-        elif key in ["pfz_assessment", "safety_assessment"]:
-            compact_evidence[key] = val
-        elif key == "alerts" and isinstance(val, dict):
-            if "alerts" in val and isinstance(val["alerts"], list):
-                compact_evidence["alerts"] = val["alerts"][:3]
+
+    intent_key = (
+        "safety"
+        if intent in {
+            "safety",
+            "sea_safety",
+            "weather_safety",
+        }
+        else intent
+    )
+
+    policy = COMPACT_FIELDS_BY_INTENT.get(
+        intent_key,
+        {}
+    )
+
+    compact_tools = {}
+
+    for tool_name, tool_data in results.items():
+
+        if not isinstance(tool_data, dict):
+            continue
+
+        fields = policy.get(tool_name)
+
+        if not fields:
+            continue
+
+        compact_data = {}
+
+        for field in fields:
+
+            if field not in tool_data:
+                continue
+
+            value = tool_data[field]
+
+            # Keep only relevant alerts.
+            if field == "alerts":
+                if isinstance(value, list):
+                    compact_data[field] = value[:3]
+                else:
+                    compact_data[field] = value
+
             else:
-                compact_evidence["alerts"] = val
-        elif key == "forecast" and isinstance(val, dict):
-            compact_evidence["forecast"] = val
-    
-    _, final_tokens = _get_token_budget(plan.get("mode", "data"), intent)
-    
+                compact_data[field] = value
+
+        if compact_data:
+            compact_tools[tool_name] = compact_data
+
+    if compact_tools:
+        compact_evidence["tools"] = compact_tools
+
+    # ---------------------------------------------------------
+    # DERIVED ASSESSMENTS
+    # ---------------------------------------------------------
+
+    if "safety_assessment" in evidence:
+        compact_evidence["safety_assessment"] = (
+            evidence["safety_assessment"]
+        )
+
+    if "pfz_assessment" in evidence:
+        compact_evidence["pfz_assessment"] = (
+            evidence["pfz_assessment"]
+        )
+
+    # ---------------------------------------------------------
+    # FORECAST
+    # ---------------------------------------------------------
+
+    if (
+        "forecast" in evidence
+        and isinstance(evidence["forecast"], dict)
+    ):
+        compact_evidence["forecast"] = evidence["forecast"]
+
+    # ---------------------------------------------------------
+    # FINAL LLM
+    # ---------------------------------------------------------
+
+    _, final_tokens = _get_token_budget(
+        plan.get("mode", "data"),
+        intent,
+    )
+
     try:
-        print(f"final call llm, query:{query_clean}, evidence: {json.dumps(compact_evidence, default=str, ensure_ascii=False)}")
+        evidence_json = json.dumps(
+            compact_evidence,
+            default=str,
+            ensure_ascii=False,
+        )
+
+        print(
+            f"final call llm, "
+            f"query={query_clean}, "
+            f"evidence={evidence_json}"
+        )
+
         answer = await call_llm(
             messages=[
-                {"role": "system", "content": FINAL_PROMPT.format(
-                    lang=detected_lang,
-                    evidence=json.dumps(compact_evidence, default=str, ensure_ascii=False),
-                    query=query_clean
-                )},
+                {
+                    "role": "system",
+                    "content": FINAL_PROMPT.format(
+                        lang=detected_lang,
+                        evidence=evidence_json,
+                        query=query_clean,
+                    ),
+                }
             ],
             temperature=0.2,
             max_tokens=final_tokens,
             reasoning_effort=None,
         )
+
     except Exception as e:
-        answer = f"I encountered an issue processing your request: {str(e)}"
-    
-    ctx.update(language=detected_lang, intent=intent, query=query_clean)
-    
-    total_time = time.time() - start_time
-    logger.info(
-        f"[{request_id}] data path complete | intent={intent} | lang={detected_lang} | "
-        f"tools={list(results.keys())} | llm_calls=2 | {total_time:.2f}s"
+        logger.exception(
+            f"[{request_id}] Final LLM failed"
+        )
+
+        answer = (
+            "I encountered an issue processing "
+            "your request."
+        )
+
+    # ---------------------------------------------------------
+    # CONTEXT + RESPONSE
+    # ---------------------------------------------------------
+
+    ctx.update(
+        language=detected_lang,
+        intent=intent,
+        query=query_clean,
     )
-    
+
+    total_time = time.time() - start_time
+
+    logger.info(
+        f"[{request_id}] data path complete | "
+        f"intent={intent} | "
+        f"lang={detected_lang} | "
+        f"tools={list(results.keys())} | "
+        f"llm_calls=2 | "
+        f"{total_time:.2f}s"
+    )
+
+    # Determine confidence from actual assessments.
+    confidence = "medium"
+
+    pfz = evidence.get("pfz_assessment")
+    safety = evidence.get("safety_assessment")
+
+    if pfz:
+        confidence = pfz.get(
+            "confidence",
+            confidence,
+        )
+    elif safety:
+        confidence = safety.get(
+            "confidence",
+            confidence,
+        )
+
     return {
         "answer": answer.strip(),
         "mode": "data",
         "language": detected_lang,
-        "location": {"lat": lat, "lon": lon, "name": None},
+        "location": {
+            "lat": lat,
+            "lon": lon,
+            "name": None,
+        },
         "intent": intent,
-        "sources": list(results.keys()) + (["alerts"] if "alerts" in evidence else []) + (["forecast"] if "forecast" in evidence else []),
-        "confidence": "high" if evidence.get("pfz_assessment") or evidence.get("safety_assessment") else "medium",
+        "sources": list(results.keys()),
+        "confidence": confidence,
         "needs_data": True,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat(),
         "evidence": compact_evidence,
     }

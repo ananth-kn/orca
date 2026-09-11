@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import Map, { Marker, NavigationControl, Source, Layer } from 'react-map-gl/maplibre';
 import type { LayerProps } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 
 export default function MapScreen() {
-  const { location, pfzs, harbors, selectedPfz, setSelectedPfz } = useAppStore();
+const { location, pfzs, harbors, selectedPfz, setSelectedPfz, refreshMarine } = useAppStore();
+  console.log("PFZS FROM STORE:", pfzs);
   const [mapStyle, setMapStyle] = useState<'dark' | 'satellite'>('dark');
   const [viewState, setViewState] = useState({
     longitude: location?.lng ?? 78.0,
@@ -29,77 +30,29 @@ export default function MapScreen() {
   });
 
   const MAP_STYLES = {
-    dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+    dark: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
     satellite: 'https://api.maptiler.com/maps/satellite/style.json?key=get_your_own_OpIi9ZULNHzrESv6T2vL'
   };
 
+    useEffect(() => {
+    if (location) refreshMarine();
+  }, [location?.lat, location?.lng]);
   const selectedData = selectedPfz ? pfzs.find(p => p.id === selectedPfz) : null;
 
-  const restrictedZoneGeojson = useMemo(() => {
-    if (!location) return null;
-    const center = [location.lng + 0.1, location.lat + 0.1];
-    const points = 64;
-    const radiusInKm = 5;
-    const coords = [];
-    for (let i = 0; i <= points; i++) {
-      const angle = (i * 360) / points;
-      const angleRad = (angle * Math.PI) / 180;
-      const dx = (radiusInKm / 111.32) * Math.cos(angleRad);
-      const dy = (radiusInKm / 111.32) * Math.sin(angleRad);
-      coords.push([center[0] + dx, center[1] + dy]);
-    }
 
-    return {
-      type: 'FeatureCollection',
-      features: [{
-        type: 'Feature',
-        geometry: {
-          type: 'Polygon',
-          coordinates: [coords]
-        },
-        properties: {}
-      }]
-    };
-  }, [location?.lat, location?.lng]);
+ const getConfidenceColor = (score: number) => {
+  const t = Math.max(0, Math.min(100, score)) / 100;
+  const sat = 20 + t * 60;
+  const light = 15 + t * 45;
+  return `hsl(142 ${sat}% ${light}%)`;
+};
 
-  const restrictedZoneLineLayer: LayerProps = {
-    id: 'restricted-zone-line',
-    type: 'line',
-    source: 'restricted-zone',
-    paint: {
-      'line-color': '#ef4444',
-      'line-width': 2,
-      'line-dasharray': [2, 2]
-    }
-  };
-
-  const restrictedZoneFillLayer: LayerProps = {
-    id: 'restricted-zone-fill',
-    type: 'fill',
-    source: 'restricted-zone',
-    paint: {
-      'fill-color': '#ef4444',
-      'fill-opacity': 0.1
-    }
-  };
-
-  const getPotentialColor = (potential: string) => {
-    switch (potential.toLowerCase()) {
-      case 'high': return '#22c55e'; // green
-      case 'moderate': return '#f59e0b'; // amber
-      case 'low': return '#ef4444'; // red
-      default: return '#3b82f6';
-    }
-  };
-
-  const getPotentialBgColor = (potential: string) => {
-    switch (potential.toLowerCase()) {
-      case 'high': return 'bg-green-500/10 text-green-500 border-green-500/20';
-      case 'moderate': return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
-      case 'low': return 'bg-red-500/10 text-red-500 border-red-500/20';
-      default: return 'bg-blue-500/10 text-blue-500 border-blue-500/20';
-    }
-  };
+const getConfidenceBg = (score: number) => {
+  const t = Math.max(0, Math.min(100, score)) / 100;
+  const sat = 20 + t * 60;
+  const light = 15 + t * 45;
+  return `hsl(142 ${sat}% ${light}% / 0.12)`;
+};
 
   return (
     <div className="relative w-full h-screen bg-[#0f1535] text-white flex flex-col pb-20">
@@ -113,12 +66,6 @@ export default function MapScreen() {
         >
           <NavigationControl position="top-left" showCompass showZoom />
 
-          {restrictedZoneGeojson && (
-            <Source id="restricted-zone" type="geojson" data={restrictedZoneGeojson as any}>
-              <Layer {...restrictedZoneFillLayer} />
-              <Layer {...restrictedZoneLineLayer} />
-            </Source>
-          )}
 
           {/* User Location Marker (only if live GPS is available) */}
           {location && (
@@ -147,7 +94,7 @@ export default function MapScreen() {
 
           {/* PFZ Markers */}
           {pfzs.map((pfz) => {
-            const color = getPotentialColor(pfz.potential);
+            const color = getConfidenceColor(pfz.score);
             const isSelected = selectedPfz === pfz.id;
             return (
               <Marker
@@ -199,8 +146,15 @@ export default function MapScreen() {
                     {selectedData.name}
                   </h3>
                   <div className="flex items-center gap-2 mt-2">
-                    <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${getPotentialBgColor(selectedData.potential)}`}>
-                      {selectedData.potential} Potential
+                    <span
+                      className="px-2.5 py-1 text-xs font-semibold rounded-full border"
+                      style={{
+                        backgroundColor: getConfidenceBg(selectedData.score),
+                        color: getConfidenceColor(selectedData.score),
+                        borderColor: getConfidenceColor(selectedData.score),
+                      }}
+                    >
+                      {selectedData.score}% Confidence
                     </span>
                     <span className="text-white/60 text-sm flex items-center gap-1">
                       <Target className="w-3.5 h-3.5" />

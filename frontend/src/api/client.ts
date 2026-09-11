@@ -15,6 +15,10 @@ import {
 } from './adapters';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+console.log("language:",localStorage.getItem('orca_lang') );
+const getCurrentLanguage = (): string => {
+  return localStorage.getItem('orca_lang') || 'English';
+};
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
@@ -263,29 +267,28 @@ export const api = {
   },
 
   chat: {
-    message: async (
-      session_id: string,
-      message: string,
-      lat?: number,
-      lon?: number,
-      language = 'en',
-      user_id?: number,
-      context?: string
-    ) => {
-      const raw = await requestRaw('/api/chat/message', {
-        method: 'POST',
-        body: JSON.stringify({
-          session_id,
-          message,
-          lat,
-          lon,
-          language: languageToIso(language),
-          user_id,
-          context,
-        }),
-      });
-      return mapChatResponse(raw);
-    },
+message: async (
+  session_id: string,
+  message: string,
+  lat?: number,
+  lon?: number,
+  user_id?: number,
+) => {
+  const raw = await requestRaw('/api/chat/message', {
+    method: 'POST',
+    body: JSON.stringify({
+      session_id,
+      message,
+      lat,
+      lon,
+      language: languageToIso(getCurrentLanguage()),
+      user_id,
+
+    }),
+  });
+
+  return mapChatResponse(raw);
+},
 
     history: async (session_id: string) =>
       mapChatHistory(await request<unknown>(`/api/chat/history/${session_id}`)),

@@ -6,7 +6,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "ORCA Marine Advisory & Intelligence API"
     VERSION: str = "0.2.0"
     SUPABASE_URL: str = ""
-    
+
+    SECRET_KEY: str
+    ALGORITHM: str
+    EXPIRATION_TIME_IN_MINUTES: int
+
     # Government & Public APIs
     MOSDAC_API_KEY: str = ""
     MOSDAC_BASE_URL: str = "https://www.mosdac.gov.in"
@@ -15,6 +19,9 @@ class Settings(BaseSettings):
     COPERNICUS_API_KEY: str = ""
     COPERNICUSMARINE_SERVICE_USERNAME: str = ""
     COPERNICUSMARINE_SERVICE_PASSWORD: str = ""
+    USE_FAKE_GPS: bool = True
+    FAKE_LATITUDE: float = 15.3004543
+    FAKE_LONGITUDE: float = 74.0855134
     
     # AI Models
     SARVAM_API_KEY: str = ""

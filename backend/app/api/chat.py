@@ -35,6 +35,7 @@ class ChatMessageResponse(BaseModel):
 
 @router.post("/message", response_model=ChatMessageResponse)
 async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_db)):
+    print(f"send chat message router req: {req}")
     if not req.message or not req.message.strip():
         return ChatMessageResponse(
             session_id=req.session_id or str(uuid.uuid4()),
@@ -87,38 +88,39 @@ async def send_chat_message(req: ChatMessageRequest, db: Session = Depends(get_d
     except Exception:
         db.rollback()
 
-    try:
-        history = (
-            db.query(ChatHistory)
-            .filter(ChatHistory.session_id == session_id)
-            .order_by(ChatHistory.created_at.desc())
-            .limit(8)
-            .all()
-        )
-        history.reverse()
+    # try:
+    history = (
+        db.query(ChatHistory)
+        .filter(ChatHistory.session_id == session_id)
+        .order_by(ChatHistory.created_at.desc())
+        .limit(8)
+        .all()
+    )
+    history.reverse()
 
-        context_parts = []
-        for h in history[:-1]:
-            role = "User" if h.role == "user" else "ORCA"
-            context_parts.append(f"{role}: {h.message}")
-        prior_context = "\n".join(context_parts[-6:])
+    context_parts = []
+    for h in history[:-1]:
+        role = "User" if h.role == "user" else "ORCA"
+        context_parts.append(f"{role}: {h.message}")
+    prior_context = "\n".join(context_parts[-6:])
 
-        result = await handle_query(
-            user_text=req.message,
-            fallback_lat=req.lat,
-            fallback_lon=req.lon,
-            context=prior_context,
-            lang=lang,
-            session_id=session_id,
-            user_id=req.user_id,
-        )
-    except Exception as e:
-        return ChatMessageResponse(
-            session_id=session_id,
-            language=lang,
-            response=f"I'm having trouble processing your request right now. Please try again shortly.",
-            provider="error",
-        )
+    result = await handle_query(
+        user_text=req.message,
+        fallback_lat=req.lat,
+        fallback_lon=req.lon,
+        context=prior_context,
+        lang=lang,
+        session_id=session_id,
+        user_id=req.user_id,
+        db=db,
+    )
+    # except Exception as e:
+    #     return ChatMessageResponse(
+    #         session_id=session_id,
+    #         language=lang,
+    #         response=f"I'm having trouble processing your request right now. Please try again shortly.",
+    #         provider="error",
+    #     )
 
     if "error" in result:
         reply_text = result.get("summary", "Sorry, an error occurred.")

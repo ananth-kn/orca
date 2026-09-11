@@ -5,7 +5,7 @@ import { Eye, EyeOff, AlertCircle, Check, Loader2, Globe, ChevronDown } from 'lu
 import { t } from '../utils/translations';
 
 type Mode = 'signin' | 'register' | 'forgot';
-
+console.log("login screen rendered")
 export const LoginScreen: React.FC = () => {
   const { setLanguage, setUserId, setUserProfile, setActiveTab } = useAppStore();
   const [mode, setMode] = useState<Mode>('signin');
@@ -55,7 +55,7 @@ export const LoginScreen: React.FC = () => {
     }
 
     if (mode === 'forgot' || mode === 'register') {
-      if (!password || password.length < 6) return t('login_error_password', currentLang);
+      if (!password || password.length < 4) return t('login_error_password', currentLang);
       if (password !== confirmPassword) return t('login_error_match', currentLang);
     }
 
@@ -75,69 +75,117 @@ export const LoginScreen: React.FC = () => {
 
     setLoading(true);
 
-    try {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
-      const endpoint = `${API_BASE_URL}/api/user/login`;
+try {
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
-      if (mode === 'forgot') {
-        const res = await fetch(`${API_BASE_URL}/api/user/reset-password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name.trim(), phone: phone.replace(/\D/g, ''), new_password: password }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || t('forgot_error_server', currentLang));
-        setSuccess(data.message || t('forgot_success', currentLang));
-        setTimeout(() => {
-          setMode('signin');
-          setPassword('');
-          setConfirmPassword('');
-        }, 2000);
-        setLoading(false);
-        return;
-      }
+  // ─────────────────────────────────────────
+  // REGISTER
+  // ─────────────────────────────────────────
+  if (mode === 'register') {
+    const res = await fetch(`${API_BASE_URL}/api/user/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name.trim(),
+        password,
+        language,
+      }),
+    });
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          password: password || undefined,
-          language: language,
-          mode: mode === 'register' ? 'register' : 'login',
-        }),
-      });
+    const data = await res.json();
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || t('login_error_backend', currentLang));
-      }
-
-      const savedLanguage = data.language || language;
-
-      // Persist identity & set reactive store state so the app navigates instantly.
-      setUserId(String(data.id));
-      setLanguage(savedLanguage);
-      setUserProfile({
-        name: data.name,
-        phone: data.phone || '',
-        emergencyPhone: data.emergency_phone || '',
-      });
-      localStorage.setItem('orca_lang', savedLanguage);
-      localStorage.setItem('orca_user_name', data.name);
-
-      setSuccess(t('login_success', currentLang, { name: data.name, lang: savedLanguage }));
-
-      setTimeout(() => {
-        setActiveTab('home');
-      }, 1000);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('login_error_backend', currentLang);
-      setError(msg);
-    } finally {
-      setLoading(false);
+    if (!res.ok) {
+      throw new Error(
+        data.detail || t('register_error_backend', currentLang)
+      );
     }
+
+    const savedLanguage = data.language || language;
+
+    setUserId(String(data.id));
+    setLanguage(savedLanguage);
+
+    setUserProfile({
+      name: data.name,
+      phone: data.phone || data.phone_number || '',
+      emergencyPhone:
+        data.emergency_phone || data.emergency_phone_number || '',
+    });
+
+    localStorage.setItem('orca_lang', savedLanguage);
+    localStorage.setItem('orca_user_name', data.name);
+
+    setSuccess(
+      t('login_success', currentLang, {
+        name: data.name,
+        lang: savedLanguage,
+      })
+    );
+
+    setTimeout(() => {
+      setActiveTab('home');
+    }, 1000);
+
+    return;
+  }
+
+  // ─────────────────────────────────────────
+  // LOGIN
+  // ─────────────────────────────────────────
+  const res = await fetch(`${API_BASE_URL}/api/user/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({
+  name: name.trim(),
+  password,
+}),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(
+      data.detail || t('login_error_backend', currentLang)
+    );
+  }
+
+  const savedLanguage = data.language || 'English';
+
+  setUserId(String(data.id));
+  setLanguage(savedLanguage);
+
+  setUserProfile({
+    name: data.name,
+    phone: data.phone || data.phone_number || '',
+    emergencyPhone:
+      data.emergency_phone || data.emergency_phone_number || '',
+  });
+
+  localStorage.setItem('orca_lang', savedLanguage);
+  localStorage.setItem('orca_user_name', data.name);
+
+  setSuccess(
+    t('login_success', currentLang, {
+      name: data.name,
+      lang: savedLanguage,
+    })
+  );
+
+  setTimeout(() => {
+    setActiveTab('home');
+  }, 1000);
+
+} catch (err: unknown) {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : t('login_error_backend', currentLang);
+
+  setError(msg);
+
+} finally {
+  setLoading(false);
+}
   };
 
   const renderLanguageDropdown = () => (

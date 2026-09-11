@@ -11,6 +11,8 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     name = Column(String(100), nullable=False)
+    password_hash = Column(String(255), nullable=False)
+
     phone_number = Column(String(20), nullable=True)
     emergency_phone_number = Column(String(20), nullable=True)
 

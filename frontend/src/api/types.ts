@@ -6,25 +6,25 @@
  * states until the backend endpoints are implemented — there is NO mock data
  * anywhere in the frontend.
  */
-
 export interface PFZData {
   id: string;
   name: string;
   lat: number;
   lng: number;
   potential: 'High' | 'Moderate' | 'Low';
-  targetSpecies: string[];
-  depthM: number;
-  sstCelsius: number;
-  chlorophyllMgM3: number;
+  score: number;
   distanceKm: number;
   travelTimeMin: number;
-  fuelLiters: number;
-  seaCondition: string;
   waveHeightM: number;
   windSpeedKmh: number;
-  score: number;
+  sstCelsius: number;
+  chlorophyllMgM3: number;
+  seaCondition: string;
   recommendationReason: string;
+
+  targetSpecies?: string[];
+  depthM?: number;
+  fuelLiters?: number;
 }
 
 export interface WeatherData {
